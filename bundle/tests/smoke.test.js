@@ -79,3 +79,11 @@ test('persona prefix carries profile marker', () => {
   const text = renderPersonaPrefix(join(tmp, '.persona', 'alice'), 'alice')
   assert.match(text, /^persona-profile:alice/)
 })
+
+test('memory_update ellipsis patch + title sanitize', () => {
+  mem.createNode(tmp, 'memory://a/b', { title: '含 中文&奇怪!字符', content: 'start MIDDLE tail end' })
+  const node = mem.readNode(tmp, 'memory://a/b')
+  assert.match(node.title, /^[A-Za-z0-9_-]+$/)
+  mem.updateNode(tmp, 'memory://a/b', { oldString: 'start...tail', newString: 'REPLACED' })
+  assert.match(mem.readNode(tmp, 'memory://a/b').content, /^REPLACED end/)
+})

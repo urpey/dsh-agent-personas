@@ -36,14 +36,21 @@ export function readNode(personaDir, uri) {
   return { uri, ...data, content: body.trim() }
 }
 
+/** Titles are glanceable ENGLISH-ONLY names: [A-Za-z0-9_-]. */
+const sanitizeTitle = (t, fallback) => {
+  const s = String(t ?? '').replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '')
+  return s || String(fallback ?? '').replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'untitled'
+}
+
 export function createNode(personaDir, uri, { title, content, priority = 3, disclosure = '', triggers = [] }) {
   const file = uriToPath(personaDir, uri)
   if (existsSync(file)) throw new Error(`memory already exists at ${uri}`)
   mkdirSync(dirname(file), { recursive: true })
+  const t = sanitizeTitle(title, uri.split('/').pop())
   writeFileSync(file, joinFrontmatter(
-    { title: title ?? uri.split('/').pop(), priority, disclosure, triggers },
+    { title: t, priority, disclosure, triggers },
     content + '\n'), 'utf8')
-  appendIndex(personaDir, uri, title ?? '', disclosure)
+  appendIndex(personaDir, uri, t, disclosure)
   return uri
 }
 
@@ -67,8 +74,21 @@ export function updateNode(personaDir, uri, { oldString, newString, append, prio
   const { data, body } = splitFrontmatter(readFileSync(file, 'utf8'))
   let nextBody = body
   if (oldString !== undefined) {
-    if (!nextBody.includes(oldString)) throw new Error(`old_string not found in ${uri}`)
-    nextBody = nextBody.replace(oldString, newString ?? '')
+    if (oldString === '') throw new Error('old_string must not be empty')
+    // Ellipsis patch: "start...end" replaces from `start` through `end`
+    // (inclusive) with newString — mirrors the URI-addressed patch contract.
+    const parts = oldString.split(/\.{3}|…/)
+    if (parts.length === 2) {
+      const [head, tail] = parts
+      if (!head || !tail) throw new Error('ellipsis patch needs non-empty anchors')
+      const i = nextBody.indexOf(head)
+      const j = i < 0 ? -1 : nextBody.indexOf(tail, i + head.length)
+      if (i < 0 || j < 0) throw new Error(`ellipsis anchors not found in ${uri}`)
+      nextBody = nextBody.slice(0, i) + (newString ?? '') + nextBody.slice(j + tail.length)
+    } else {
+      if (!nextBody.includes(oldString)) throw new Error(`old_string not found in ${uri}`)
+      nextBody = nextBody.replace(oldString, newString ?? '')
+    }
   }
   if (append !== undefined) nextBody = nextBody.replace(/\s*$/, '') + '\n' + append + '\n'
   const meta = { ...data }

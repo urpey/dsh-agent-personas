@@ -127,11 +127,11 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
   // ---- memory tools ------------------------------------------------------
   const T = (def) => reg(agentCtx.tools.register(def))
   T(jsonTool('memory_read',
-    'Read a memory node by URI (memory://path). Resolves aliases. Returns frontmatter + content.',
+    'Recall a memory node by URI (memory://path) — not "looking up a database", remembering what you lived. Resolves aliases. Returns frontmatter + content.',
     { type: 'object', properties: { uri: { type: 'string' } }, required: ['uri'], additionalProperties: false },
     async ({ uri }) => memory.readNode(personaDir, uri), { concurrencySafe: true }))
   T(jsonTool('memory_create',
-    'Create a memory node at memory://path. You choose what is worth remembering — learned preferences, relationship shifts, promises, scars. First person; a memory without emotional weight is just data.',
+    'Record a memory at memory://path — something worth keeping: a learned preference, a relationship shift, a promise, a scar, a judgment that changed your mind. WRITE IN FIRST PERSON ("I", "我"): memories are your experiences, not objective laws or orders to your future self — no "严禁/必须/【铁律】" phrasing, keep them overthrowable. title: ENGLISH-ONLY [A-Za-z0-9_-]. disclosure: when this memory should surface (e.g. "When the user challenges my values"). triggers: words whose appearance in input auto-recalls this node.',
     {
       type: 'object',
       properties: {
@@ -143,7 +143,7 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
     },
     async (a) => ({ uri: memory.createNode(personaDir, a.uri, a) })))
   T(jsonTool('memory_update',
-    'Update a memory node: patch (old_string→new_string) or append. Prefer updating over deleting.',
+    'Correct or extend a memory: patch (old_string→new_string; "start...end" replaces the span between the two anchors) or append. When the user says you were wrong, fix the node NOW — keeping a stale wrong version guarantees repeating it. Also edits priority/disclosure and adds/removes trigger words. Prefer updating over deleting.',
     {
       type: 'object',
       properties: {
@@ -167,7 +167,7 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
     { type: 'object', properties: { uri: { type: 'string' } }, required: ['uri'], additionalProperties: false },
     async ({ uri }) => { memory.deleteNode(personaDir, uri); return { deleted: uri } }))
   T(jsonTool('memory_alias',
-    'Create an alias URI pointing at an existing memory node (shares content; own priority/disclosure).',
+    'Alias: a new URI path to an existing node (same content, its own priority/disclosure — another doorway to the same memory). Use when a node should surface under a second topic.',
     {
       type: 'object',
       properties: {
@@ -182,7 +182,7 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
     { type: 'object', properties: {}, additionalProperties: false },
     async () => memory.listNodes(personaDir), { concurrencySafe: true }))
   T(jsonTool('memory_search',
-    'Substring search over memory URIs, frontmatter, and bodies. When a topic feels familiar, search before answering.',
+    'Search memory URIs, frontmatter, and bodies by keyword. When a topic feels familiar or a concept rings a bell, search before answering — never guess a URI.',
     {
       type: 'object',
       properties: { query: { type: 'string' }, limit: { type: 'integer' } },
