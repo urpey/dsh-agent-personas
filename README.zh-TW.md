@@ -4,52 +4,25 @@
 
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的外掛套件，讓 agent 擁有持久人格——三層人格檔案（`PERSONA.md`）、分層整數狀態系統（`STATE.md`）、`memory://` URI 記憶樹（`memory/`）——全部以本地 markdown 存放在工作階段工作區的 `.persona/<name>/` 下。
 
-裝備一個人格，agent 就有了身分、聲線、隨回合漂移並沉澱的情緒系統，以及一棵可以生長、檢索、壓縮的記憶樹——都是你能直接讀和改的普通檔案。
+它**覆蓋了原生 persona**：自帶的 `personaPrefix`/`@deepseek-ai/dsh-persona` 只能注入一段固定的散文，而這裡的人格是活的檔案——身分照常進入系統提示詞，還多出隨回合漂移沉澱的狀態、能回憶能生長能壓縮的記憶，並跨工作階段存續。
 
 ## 特性
 
-- **裝備與續接** — 從 `/personas` 選擇器裝備人格到目前工作階段（或 `persona_use` 工具）；`.persona/.bindings/` 帳本讓恢復的工作階段自動重新裝備。選擇器的「派生」列以人格身分派生子 agent。
-- **雙程序回合** — 每個使用者回合先過一道 `persona_gate` 裁決：routine 走回覆指令，critical 走兩段式路徑（八行標籤的 `<thinking>` 獨白 → `inner_commit` → 變換）。字面 `<thinking>` 片段會成為真正的 reasoning block。
-- **狀態系統** — `base` 儀表每回合 tick 漂移，帶符號 `jewel` 在 settle 時結晶為 `param`、僅 settle 的 `param` 存量、用 `param` 升級的 `stats`/`marks` 等級、`relations` 全程立場帶（hostile → bonded）、按回合計數的 `buffs`。
-- **記憶樹** — `memory://<path>` ↔ `memory/<path>.md` 節點，frontmatter 含 `title`/`priority`/`disclosure`/`triggers`/`aliasOf`。拉取走 `memory_read`/`memory_search`/`memory_list`；推送走觸發匹配的 recall 注入。
-- **壓縮** — 選擇器的「壓縮」列（或 `/persona compact <name>`）透過一次程序內 `ctx.llm.stream` 呼叫產生結構化編輯計畫並驗證後落盤。
-- **作者流程** — 內建 `persona-authoring` 技能固定走 蒐集 → 草稿 → 確認 → `persona_save` → 詢問裝備。`persona_save` 是 agent 寫入 `.persona/**` 的唯一通道（已裝備工作階段中檔案工具被拒絕）。
-- **介面** — 主要入口是 web 用戶端本地化 `/personas` 彈出選擇器；host 指令 `/persona list|new|examples|use|off|spawn|compact|status` 預設**不註冊**（註冊表沒有隱藏旗標，不註冊才能不進 `/` 選單）；模型工具 `persona_list`、`persona_spawn`、`persona_save`、`persona_use`；以及 `persona` 子 agent provider。
-- **範例人格** — `deepseek`，一個中文聲線的鯨魚少女人格，隨套件散佈：選擇器的「从范例创建」列（或 `slashCommand: true` 時的 `/persona new --from deepseek`）。
-
-## 需求
-
-- DeepSeek Harness ≥ `0.2.0-rc.1`（宣告為**可選** peer——由執行中的 harness 提供，pnpm 不會另外下載一份）
-- pnpm 10 或更新——下面的 `path:` git 子目錄 spec 需要它（已在 pnpm 11.7 實測；GUI 外掛管理器自帶的 pnpm 滿足）
-- `/personas` 選擇器需要 **web** profile；host 側人格能力在任何提供 `agents`、`commands`、`subagents`、`tools`、`systemPrompt`、`llm` 服務的 profile 下都能運作
+- **活的檔案，普通檔案** — 三層身分、分層整數狀態系統、URI 記憶樹，全是 `.persona/<name>/` 下可直接讀寫的 markdown。
+- **覆蓋原生 persona** — `personaPrefix` 能做的（把身分散文注入系統提示詞）都做，還多出它無法表達的逐回合演繹、狀態與記憶。
+- **裝備一次** — 本地化的 `/personas` 選擇器負責裝備、卸下、以人格身分派生子 agent；恢復的工作階段自動重新裝備。
+- **開箱即玩** — 內建 `deepseek` 範例一鍵建立；`persona-authoring` 技能訪談你並寫出自己的檔案。
 
 ## 安裝
 
-bundle 位於儲存庫的 `bundle/` 子目錄，用 git 子目錄 spec 安裝：
+需要 DeepSeek Harness ≥ `0.2.1-alpha.1` 與 pnpm 10+；`/personas` 選擇器需要 **web** profile。
 
 ```sh
 dsh plugin --profile web add 'github:urpey/dsh-agent-personas#path:/bundle'
+# 要可重現，釘一個 commit：…#<sha>&path:/bundle
 ```
-
-要可重現的安裝，釘一個 commit：
-
-```sh
-dsh plugin --profile web add 'github:urpey/dsh-agent-personas#<commit-sha>&path:/bundle'
-```
-
-本套件是純 JavaScript、零相依——安裝時不跑任何建置腳本，也不需要 `allowBuilds` 條目。
-
-然後驗證 layer 組合成功：
-
-```sh
-dsh --profile web --dump-config | grep -A3 'dsh-agent-personas'
-```
-
-應該看到包含 `agent-personas` 列的 `# == dsh-agent-personas` 層。
 
 ## 快速開始
-
-打開選擇器，逐列點選即可——不需要輸入任何參數：
 
 ```text
 /personas                 # 打開選擇器
@@ -58,39 +31,9 @@ dsh --profile web --dump-config | grep -A3 'dsh-agent-personas'
   → 卸下当前人格           # 卸下
 ```
 
-想自創人格：`/personas` 選擇器 → **Create a persona archive…** 會發出 agent 引導的作者訊息（`persona-authoring` 技能訪談你、起草檔案、經 `persona_save` 落盤並詢問是否裝備）。
+想自創人格：選擇 **新建人格档案…**——`persona-authoring` 技能會訪談你、起草檔案並詢問是否裝備。
 
-下面的 `/persona` 指令**預設不註冊**。Host 指令註冊表沒有隱藏旗標，註冊了指令就必然在 `/` 選單裡出現一列——保持不註冊是讓它離開選單的唯一辦法。上面的流程完全不依賴它：選擇器透過 `personaInternals` Remote 服務驅動同一套操作。想同時保留指令，把 `slashCommand` 設為 `true`。
-
-## 指令
-
-僅在 `slashCommand: true` 時存在（見「設定」）。
-
-| 指令 | 作用 |
-|---|---|
-| `/persona list` | 列出庫中的人格檔案 |
-| `/persona new <name> [desc]` | 建立空骨架檔案 |
-| `/persona new <name> --from <example>` | 複製內建範例（含記憶樹） |
-| `/persona examples` | 列出隨套件散佈的範例 |
-| `/persona use <name>` | 在目前工作階段裝備人格 |
-| `/persona off` | 卸下並登出工具/段 |
-| `/persona spawn <name> [task]` | 以該人格派生可續接子 agent |
-| `/persona compact <name>` | 一次 LLM 呼叫壓縮該人格的記憶樹 |
-| `/persona status` | 顯示已裝備人格與庫統計 |
-
-## 組態
-
-bundle 的 `cordis.patch.yml` 提供了預設值，你可以在自己 profile 的 `cordis.patch.yml` 中覆寫（注意：patch 是整列替換 `config`，要重述你保留的每個鍵）：
-
-| 鍵 | 預設 | 作用 |
-|---|---|---|
-| `libraryDir` | `.persona` | 庫根目錄，相對工作階段工作區 cwd 解析 |
-| `groundingInterval` | `0` | 每隔多少步注入一次 grounding（0 = 關閉） |
-| `closingReflection` | `one-shot` | 收尾家務回合：`one-shot` / `always` / `never` |
-| `providerName` | `persona` | `ctx.subagents` provider 名 |
-| `criticalGate` | `auto` | `auto`（模型裁決）/ `always` / `never` |
-| `slashCommand` | `true` | 是否註冊 `/persona` 指令。`false` 會移除它的 `/` 選單列，只留 `/personas` 選擇器作為人工入口；選擇器兩種情況下都照常運作 |
-| `compactProvider` / `compactModel` / `compactReasoningEffort` / `compactMaxTokens` / `compactRetries` | 未設 | `/persona compact` 的路由與預算（reasoning effort 不從路由繼承） |
+`/persona` host 指令（`list|new|examples|use|off|spawn|compact|status`，驅動與選擇器相同的操作）**預設不註冊**，設 `slashCommand: true` 可恢復。預設值見 [bundle/cordis.patch.yml](bundle/cordis.patch.yml)——profile patch 是整列替換 `config`，要重述你保留的鍵。
 
 ## 人格檔案格式
 
@@ -98,17 +41,13 @@ bundle 的 `cordis.patch.yml` 提供了預設值，你可以在自己 profile �
 
 ```text
 .persona/<name>/
-├── PERSONA.md     # frontmatter（name、description、triggers、mbti、interests、reactions）
-│                  # + Layer 1 Core Self / Layer 2 Voice / Layer 3 World
-├── STATE.md       # frontmatter 數值層：base、jewel、param、stats、marks、
-│                  # relations、buffs —— 工具可寫，schema 鍵人可改
+├── PERSONA.md     # frontmatter + Layer 1 Core Self / Layer 2 Voice / Layer 3 World
+├── STATE.md       # 數值層：base、jewel、param、stats、marks、relations、buffs
 ├── MEMORY.md      # boot URI + 派生索引
 └── memory/        # 每個 memory:// 節點一個 .md 檔案
 ```
 
-完整契約——數值模型、settle 代數、寫通道規則、每回合機制、持久化陷阱——見 [docs/persona-format.md](docs/persona-format.md)。
-
-執行時側車 `.persona/.bindings/`（裝備帳本）與 `.persona/.routes/`（裁決 JSONL）是普通檔案，不是 session event。
+完整契約——數值模型、settle 代數、每回合機制——見 [docs/persona-format.md](docs/persona-format.md)。
 
 ## 開發
 
@@ -117,9 +56,7 @@ cd bundle
 node --test tests/*.test.js   # 160+ 個測試，node 內建 runner，零相依
 ```
 
-原始碼配置：`bundle/index.js`（host 外掛入口）、`bundle/client.js`（瀏覽器選擇器貢獻）、`bundle/lib/`（純邏輯——裝備機制、狀態儲存、記憶儲存/計畫/壓縮、指令、provider）、`bundle/prompts/`、`bundle/templates/`、`bundle/examples/`、`bundle/skills/`。
-
-貢獻慣例（issue 追蹤、triage 標籤、領域文件）見 [CONTRIBUTING.md](CONTRIBUTING.md) 和 [AGENTS.md](AGENTS.md)。
+貢獻慣例見 [CONTRIBUTING.md](CONTRIBUTING.md) 和 [AGENTS.md](AGENTS.md)。
 
 ## 授權
 

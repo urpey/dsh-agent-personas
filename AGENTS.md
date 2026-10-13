@@ -57,6 +57,22 @@ bundle/
 
 Runtime directories inside `.persona/`: `.bindings/` (equip ledger, `{ name, boundAt }`) and `.routes/` (one verdict line per turn: `critical|routine|missed|no-delta` + reason/signals/quick pass/delta).
 
+## Host command
+
+`/persona` exists only when `slashCommand: true` (default in the shipped patch is `false`, so the picker is the only human entry point). Every subcommand is a thin raw-line parse over `createPersonaOps()` — the picker reaches the same table through `personaInternals`:
+
+| Command | Effect |
+|---|---|
+| `/persona list` | List persona archives in the library |
+| `/persona new <name> [desc]` | Create an empty skeleton archive |
+| `/persona new <name> --from <example>` | Copy a bundled example (memory tree included) |
+| `/persona examples` | List the examples shipped in the bundle |
+| `/persona use <name>` | Equip a persona on this session |
+| `/persona off` | Unequip and unregister tools/sections |
+| `/persona spawn <name> [task]` | Start a continuable child agent as that persona |
+| `/persona compact <name>` | Compact the persona's memory tree via one LLM call |
+| `/persona status` | Show the equipped persona and library counts |
+
 ## Per-turn pipeline (equipped session)
 
 1. **`agent/pre-step`, new turn** — `tickBuffs` + `tickBase` (one write), queued notices (buff expiry, malformed `reactions`).
@@ -76,7 +92,7 @@ Riding the same step block, before the gate instruction: trigger-matched `[perso
 | `closingReflection` | `one-shot` | `one-shot` / `always` / `never` closing housekeeping turn |
 | `providerName` | `persona` | `ctx.subagents` provider name |
 | `criticalGate` | `auto` | `auto` (model rules) / `always` / `never` |
-| `slashCommand` | `true` | register the `/persona` Host command. `false` removes its `/` menu row (the registry has no hidden flag) and leaves the `/personas` picker as the only human entry point — the picker reaches the same operations through the `personaInternals` Remote service, so nothing else changes |
+| `slashCommand` | `true` in code; **`false` in the shipped patch** | register the `/persona` Host command. `false` removes its `/` menu row (the registry has no hidden flag) and leaves the `/personas` picker as the only human entry point — the picker reaches the same operations through the `personaInternals` Remote service, so nothing else changes. The code default is `!== false` → `true`, so a user patch that restates `config` but omits this key silently re-registers the command |
 | `compactProvider`/`compactModel`/`compactReasoningEffort`/`compactMaxTokens`/`compactRetries` | unset | `/persona compact` routing and budget (reasoning effort is NOT inherited from the route) |
 
 ## Agent skills
