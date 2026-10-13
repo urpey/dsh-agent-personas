@@ -10,7 +10,7 @@
 
 - **装备与续接** — `/persona use <name>` 将人格装备到当前会话；`.persona/.bindings/` 台账让恢复的会话自动重新装备。`/persona spawn <name>` 以人格身份派生子 agent。
 - **双进程回合** — 每个用户回合先过一道 `persona_gate` 裁决：routine 走回复指令，critical 走两段式路径（八行标签的 `<thinking>` 独白 → `inner_commit` → 变换）。字面 `<thinking>` 片段会成为真正的 reasoning block。
-- **状态系统** — 七层整数：`base` 仪表每回合 tick 漂移，带符号 `juel` 在 settle 时结晶为 `param`，仅 settle 的 `param`,`stats`/`marks` 等级，`relations` 立场带（hostile → bonded)，按回合计数的 `buffs`。
+- **状态系统** — `base` 仪表每回合 tick 漂移，带符号 `juel` 在 settle 时结晶为 `param`，仅 settle 的 `param` 存量，用 `param` 升级的 `stats`/`marks` 等级，`relations` 全程立场带（hostile → bonded)，按回合计数的 `buffs`。
 - **记忆树** — `memory://<path>` ↔ `memory/<path>.md` 节点，frontmatter 含 `title`/`priority`/`disclosure`/`triggers`/`aliasOf`。拉取走 `memory_read`/`memory_search`/`memory_list`；推送走触发匹配的 recall 注入。
 - **压缩** — `/persona compact <name>` 通过一次进程内 `ctx.llm.stream` 调用生成结构化编辑计划并校验后落盘。
 - **作者流程** — 内置 `persona-authoring` 技能固定走 收集 → 草稿 → 确认 → `persona_save` → 询问装备。`persona_save` 是 agent 写入 `.persona/**` 的唯一通道（已装备会话中文件工具被拒绝）。
@@ -109,7 +109,7 @@ bundle 的 `cordis.patch.yml` 提供了默认值，你可以在自己 profile �
 
 ```sh
 cd bundle
-node --test tests/*.test.js   # 170 个测试，node 内置 runner，零依赖
+node --test tests/*.test.js   # 160+ 个测试，node 内置 runner，零依赖
 ```
 
 源码布局：`bundle/index.js`(host 插件入口）、`bundle/client.js`（浏览器选择器贡献）、`bundle/lib/`（纯逻辑——装备机制、状态存储、记忆存储/计划/压缩、命令、provider)、`bundle/prompts/`、`bundle/templates/`、`bundle/examples/`、`bundle/skills/`。

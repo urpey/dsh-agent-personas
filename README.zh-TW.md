@@ -10,7 +10,7 @@
 
 - **裝備與續接** — `/persona use <name>` 將人格裝備到目前工作階段；`.persona/.bindings/` 帳本讓恢復的工作階段自動重新裝備。`/persona spawn <name>` 以人格身分派生子 agent。
 - **雙程序回合** — 每個使用者回合先過一道 `persona_gate` 裁決：routine 走回覆指令，critical 走兩段式路徑（八行標籤的 `<thinking>` 獨白 → `inner_commit` → 變換）。字面 `<thinking>` 片段會成為真正的 reasoning block。
-- **狀態系統** — 七層整數：`base` 儀表每回合 tick 漂移，帶符號 `juel` 在 settle 時結晶為 `param`、僅 settle 的 `param`、`stats`/`marks` 等級、`relations` 立場帶（hostile → bonded）、按回合計數的 `buffs`。
+- **狀態系統** — `base` 儀表每回合 tick 漂移，帶符號 `juel` 在 settle 時結晶為 `param`、僅 settle 的 `param` 存量、用 `param` 升級的 `stats`/`marks` 等級、`relations` 全程立場帶（hostile → bonded）、按回合計數的 `buffs`。
 - **記憶樹** — `memory://<path>` ↔ `memory/<path>.md` 節點，frontmatter 含 `title`/`priority`/`disclosure`/`triggers`/`aliasOf`。拉取走 `memory_read`/`memory_search`/`memory_list`；推送走觸發匹配的 recall 注入。
 - **壓縮** — `/persona compact <name>` 透過一次程序內 `ctx.llm.stream` 呼叫產生結構化編輯計畫並驗證後落盤。
 - **作者流程** — 內建 `persona-authoring` 技能固定走 蒐集 → 草稿 → 確認 → `persona_save` → 詢問裝備。`persona_save` 是 agent 寫入 `.persona/**` 的唯一通道（已裝備工作階段中檔案工具被拒絕）。
@@ -109,7 +109,7 @@ bundle 的 `cordis.patch.yml` 提供了預設值，你可以在自己 profile �
 
 ```sh
 cd bundle
-node --test tests/*.test.js   # 170 個測試，node 內建 runner，零相依
+node --test tests/*.test.js   # 160+ 個測試，node 內建 runner，零相依
 ```
 
 原始碼配置：`bundle/index.js`（host 外掛入口）、`bundle/client.js`（瀏覽器選擇器貢獻）、`bundle/lib/`（純邏輯——裝備機制、狀態儲存、記憶儲存/計畫/壓縮、指令、provider）、`bundle/prompts/`、`bundle/templates/`、`bundle/examples/`、`bundle/skills/`。

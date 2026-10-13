@@ -75,7 +75,7 @@ export function registerCommands(ctx, cfg, resolveCwd) {
           const from = fromAt === -1 ? undefined : rest[fromAt + 1]
           const positional = fromAt === -1 ? rest : [...rest.slice(0, fromAt), ...rest.slice(fromAt + 2)]
           const [name = from, ...desc] = positional
-          if (from === '') return err('usage: /persona new [name] --from <example>')
+          if (fromAt !== -1 && !from) return err('usage: /persona new [name] --from <example>')
           if (!name) return err('usage: /persona new <name> [description] — or /persona new [name] --from <example> (see /persona examples)')
           try {
             if (from !== undefined) {

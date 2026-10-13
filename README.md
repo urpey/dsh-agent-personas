@@ -10,7 +10,7 @@ Equip a persona and the agent gains an identity, a voice, a mood system that dri
 
 - **Equip & resume** — `/persona use <name>` mounts the persona on the session; a `.persona/.bindings/` ledger re-equips resumed sessions automatically. `/persona spawn <name>` runs a child agent already in character.
 - **Dual-process turns** — every user turn passes a `persona_gate` verdict: routine turns get a reply directive, critical turns get a two-stage path (labeled `<thinking>` monologue → `inner_commit` → transform). Literal `<thinking>` spans become real reasoning blocks.
-- **State system** — seven integer layers: `base` gauges with per-turn tick drift, signed `juel` that crystallizes into `param` at settle, settle-only `param`, `stats`/`marks` levels, `relations` with stance bands (hostile → bonded), and turn-counted `buffs`.
+- **State system** — `base` gauges with per-turn tick drift, signed `juel` that crystallizes into `param` at settle, settle-only `param` standing, `stats`/`marks` levels bought by `param`, `relations` with total stance bands (hostile → bonded), and turn-counted `buffs`.
 - **Memory tree** — `memory://<path>` ↔ `memory/<path>.md` nodes with `title`/`priority`/`disclosure`/`triggers`/`aliasOf` frontmatter. Pull via `memory_read`/`memory_search`/`memory_list`; push via trigger-matched recall injections.
 - **Compaction** — `/persona compact <name>` tidies the memory tree through one in-process `ctx.llm.stream` call and a validated structured-output edit plan.
 - **Authoring** — the bundled `persona-authoring` skill runs a fixed collect → draft → confirm → `persona_save` → equip flow. `persona_save` is the only agent write channel into `.persona/**` (file tools are denied there in equipped sessions).
@@ -109,7 +109,7 @@ Runtime sidecars `.persona/.bindings/` (equip ledger) and `.persona/.routes/` (v
 
 ```sh
 cd bundle
-node --test tests/*.test.js   # 170 tests, node built-in runner, zero deps
+node --test tests/*.test.js   # 160+ tests, node built-in runner, zero deps
 ```
 
 Source layout: `bundle/index.js` (host plugin entry), `bundle/client.js` (browser picker contribution), `bundle/lib/` (pure logic — equip machinery, state store, memory store/plan/compact, commands, provider), `bundle/prompts/`, `bundle/templates/`, `bundle/examples/`, `bundle/skills/`.
