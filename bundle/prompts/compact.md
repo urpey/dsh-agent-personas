@@ -1,4 +1,4 @@
-[persona maintenance] Memory audit pass. Read your memory index (persona:memory-index section), then:
+[persona maintenance] Memory audit pass. Read your memory index (the memory index in your persona context block), then:
 
 1. MERGE — near-duplicate or fragmented nodes about the same subject: fold them into the best node with `memory_update` (append missing facts, keep strongest wording), then `memory_alias` the absorbed URIs to the survivor so old links still resolve. `memory_delete` only when a node is truly obsolete — never silently erase.
 2. REPRIORITIZE — stale or trivial entries get `memory_update` with a higher priority number (p4–p6); load-bearing self-knowledge stays p0–p2.

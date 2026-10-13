@@ -12,7 +12,7 @@ import * as state from './state-store.js'
 import { renderStateSummary } from './state-store.js'
 import { splitFrontmatter } from './frontmatter.js'
 import { assessTurn } from './critical.js'
-import { modeNotice } from './critical-prompts.js'
+import { modeNotice, stageTwoPrompt } from './critical-prompts.js'
 
 const PLUGIN = 'dsh-persona-system'
 const WRITE_TOOLS = new Set(['write', 'edit', 'multi_edit', 'bash'])
@@ -86,36 +86,33 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
   } catch (e) {
     if (!/already registered in this scope/.test(String(e?.message ?? e))) throw e
   }
-  section({
-    name: 'persona:state',
-    order: 480,
-    text: () => {
-      try {
-        const { data } = state.loadState(personaDir)
-        return `## Current state\n${renderStateSummary(data)}`
-      } catch { return '' }
-    },
-  })
-  section({
-    name: 'persona:boot',
-    order: 481,
-    text: () => {
-      try { return memory.renderBoot(personaDir) } catch { return '' }
-    },
-  })
-  // Compact catalog of every node: uri, priority, disclosure, triggers.
-  // Lets the model `memory_read` on demand instead of holding all content.
-  // Capped at MAX_INDEX_LINES (sorted by priority) so a large library can't
-  // eat the context window — overflow stays reachable via memory_search.
+  // ---- dynamic persona context ------------------------------------------
+  // State, boot memory and the memory index change constantly, so they are NOT
+  // prompt sections: editing the system prompt invalidates the provider's
+  // prompt cache for everything after it — the whole conversation included —
+  // which made every state_delta / settle / memory write cost a full-price
+  // re-send. Appended as a message at the END of the step input instead, only
+  // the tail is new; the stable prefix (persona body + protocol + preset)
+  // stays cacheable.
   const MAX_INDEX_LINES = 30
-  section({
-    name: 'persona:memory-index',
-    order: 482,
-    text: () => {
-      try {
-        const nodes = memory.listNodes(personaDir)
-        if (!nodes.length) return ''
-        const sorted = [...nodes].sort((a, b) => (a.priority ?? 3) - (b.priority ?? 3))
+  const personaContextText = () => {
+    const parts = []
+    try {
+      const { data } = state.loadState(personaDir)
+      parts.push(`## Current state\n${renderStateSummary(data)}`)
+    } catch { /* unreadable state — omit the block */ }
+    try {
+      const boot = memory.renderBoot(personaDir)
+      if (boot) parts.push(boot)
+    } catch { /* unreadable memory — omit the block */ }
+    // Compact catalog of every node: uri, priority, disclosure, triggers.
+    // Lets the model `memory_read` on demand instead of holding all content.
+    // Capped at MAX_INDEX_LINES (sorted by priority) so a large library can't
+    // eat the context window — overflow stays reachable via memory_search.
+    try {
+      const nodes = memory.listNodes(personaDir)
+      if (nodes.length) {
+        const sorted = [...nodes].sort((x, y) => (x.priority ?? 3) - (y.priority ?? 3))
         const shown = sorted.slice(0, MAX_INDEX_LINES)
         const lines = shown.map(n => {
           const t = Array.isArray(n.triggers) && n.triggers.length ? ` [triggers: ${n.triggers.join(', ')}]` : ''
@@ -124,10 +121,12 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
         })
         const hidden = sorted.length - shown.length
         if (hidden > 0) lines.push(`… ${hidden} more nodes — use memory_search to reach them`)
-        return `## Memory index\n${lines.join('\n')}`
-      } catch { return '' }
-    },
-  })
+        parts.push(`## Memory index\n${lines.join('\n')}`)
+      }
+    } catch { /* unreadable index — omit the block */ }
+    if (!parts.length) return ''
+    return `[persona context — internal state, not user input]\n${parts.join('\n\n')}`
+  }
   section({
     name: 'persona:protocol',
     order: 483,
@@ -162,7 +161,25 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
   }))
 
   // ---- memory tools ------------------------------------------------------
-  const T = (def) => reg(agentCtx.tools.register(def))
+  // The context block is re-injected whenever it could have gone stale: at the
+  // start of a turn, and right after any tool that mutates state or memory.
+  let contextDirty = true
+  const MUTATORS = new Set([
+    'memory_create', 'memory_update', 'memory_delete', 'memory_alias',
+    'state_delta', 'state_settle', 'state_note', 'buff_apply', 'buff_clear',
+  ])
+  const T = (def) => {
+    if (MUTATORS.has(def.name)) {
+      const inner = def.execute
+      def = {
+        ...def,
+        execute: async (...args) => {
+          try { return await inner(...args) } finally { contextDirty = true }
+        },
+      }
+    }
+    return reg(agentCtx.tools.register(def))
+  }
   T(jsonTool('memory_read',
     'Recall a memory node by URI (memory://path) — not "looking up a database", remembering what you lived. Resolves aliases. Returns frontmatter + content.',
     { type: 'object', properties: { uri: { type: 'string' } }, required: ['uri'], additionalProperties: false },
@@ -269,6 +286,17 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
     { type: 'object', properties: { text: { type: 'string' } }, required: ['text'], additionalProperties: false },
     async ({ text }) => state.appendNote(personaDir, text)))
 
+  // ---- inner_commit: the step-cutting tool that carries stage 1 -> stage 2 --
+  // A critical turn spends its first generation on the monologue alone, so the
+  // deliberation cannot be skipped and the transform gets its own directive.
+  T(jsonTool('inner_commit',
+    'Commit the inner monologue you just emitted in <thinking>…</thinking>. Call this immediately after the block on a critical turn — it ends stage 1 and hands you the stage-2 transform directive.',
+    { type: 'object', properties: {}, additionalProperties: false },
+    async (_a, exec) => {
+      try { exec?.agent?.session?.append('persona/stage', { stage: 2, turn: 'mark' }) } catch { /* log-only marker */ }
+      return stageTwoPrompt({ name })
+    }))
+
   // Observe turn failures through the agent scope logger (host log).
   reg(agentCtx.on('agent/error', ({ turn, step, error }) => {
     agentCtx.logger?.warn?.(`[persona:${name}] turn ${turn} step ${step} error:`, error)
@@ -311,10 +339,17 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
       const expired = state.tickBuffs(personaDir)
       if (expired.length) agent.inject?.(userMsg(`[persona] buffs expired: ${expired.join(', ')}`))
     }
+    if (turn !== lastTurn) contextDirty = true
     const decision = await next()
     if (decision.kind !== 'enter') return decision
     const extra = []
     const text = latestText(decision)
+    // Fresh persona context first, so the mode notice can point at it.
+    if (contextDirty) {
+      const ctxText = personaContextText()
+      if (ctxText) extra.push(userMsg(ctxText))
+      contextDirty = false
+    }
     // Step 0 — the gate, run BEFORE this turn's generation starts.
     // It fixes the turn's shape: 1 segment (reply) or 2 (<thinking> + reply).
     // Both shapes are a single LLM call; only the segment count differs.
@@ -328,7 +363,7 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
             ? { critical: true, reason: 'gate forced always' }
             : assessTurn({ text, meta, state: st.data, extraKeywords: cfg.criticalKeywords ?? [] })
         extra.push(userMsg(modeNotice({
-          mode: critical ? 'two' : 'one',
+          mode: critical ? 'staged' : 'one',
           mbti: meta.mbti ?? '', state: st.data, reason,
         })))
       } catch { /* unreadable state — turn proceeds without a mode notice */ }

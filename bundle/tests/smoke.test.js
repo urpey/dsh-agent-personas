@@ -127,17 +127,19 @@ test('critical gate: criticality criteria', async () => {
   assert.equal(assessTurn({ text: '列一下文件', state: st }).critical, false)
 })
 
-test('turn mode notices: 1-segment vs 2-segment, single call', async () => {
-  const { modeNotice } = await import('../lib/critical-prompts.js')
+test('turn mode notices: staged critical turn vs one-step routine turn', async () => {
+  const { modeNotice, stageTwoPrompt } = await import('../lib/critical-prompts.js')
   const one = modeNotice({ mode: 'one' })
-  assert.match(one, /1-segment turn/)
+  assert.match(one, /1-step turn/)
   assert.match(one, /No <thinking> block/)
   const two = modeNotice({
-    mode: 'two', mbti: 'INTP', reason: 'keyword "错"',
+    mode: 'staged', mbti: 'INTP', reason: 'keyword "错"',
     state: { palam: { anger: { value: 40 } }, base: { energy: { value: 20, max: 100 } }, relations: { lead: { value: -40 } }, buffs: [{ name: 'adrenaline' }] },
   })
-  assert.match(two, /2-segment turn/)
-  assert.match(two, /STATE:/)
+  assert.match(two, /2-step turn/)
+  // Step 1 is the monologue alone — the reply is explicitly deferred.
+  assert.match(two, /call inner_commit/)
+  assert.match(two, /No reply text in this step/)
   // MBTI letters are expanded into tuning hints, not printed raw.
   assert.match(two, /thoughts run inward/)
   assert.match(two, /analytic/)
@@ -146,8 +148,12 @@ test('turn mode notices: 1-segment vs 2-segment, single call', async () => {
   assert.match(two, /energy is low \(20\/100\)/)
   assert.match(two, /distrust lead/)
   assert.match(two, /adrenaline/)
-  // No structural tool is referenced anymore — one call, two segments.
-  assert.doesNotMatch(two, /inner_commit/)
+  // The state block now rides in the injected context, not a prompt section.
+  assert.match(two, /persona context VERBATIM/)
+  // Stage 2 is the transform directive handed back by inner_commit.
+  const s2 = stageTwoPrompt({ name: 'alice' })
+  assert.match(s2, /stage 2 of 2/)
+  assert.match(s2, /Output ONLY the reply/)
 })
 
 test('settle: decay is % of remainder kept — never grows palam', () => {

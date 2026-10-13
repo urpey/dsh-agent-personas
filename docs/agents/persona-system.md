@@ -114,11 +114,21 @@ Prompt sections injected per equipped agent (agent-scoped, in assembly order):
 
 | Section | Order | Kind | Content |
 |---|---|---|---|
-| `deployment:persona-prefix` | 0 | static | `persona-profile:<name>` marker + full PERSONA.md. Skipped when the spawn provider already mounted it via `request.persona`. |
-| `persona:state` | 480 | dynamic fn | Rendered STATE summary — base/max, palam, relations, active buffs. Internal dashboard only: the protocol forbids speaking numbers/stat names in visible text; state shapes tone, not content. |
-| `persona:boot` | 481 | dynamic fn | MEMORY.md `Boot URIs` expanded to full node bodies. |
-| `persona:memory-index` | 482 | dynamic fn | Compact catalog: `- uri (pN [alias→x]) — disclosure [triggers: a, b]`. Capped at 30 rows by priority; overflow reachable via `memory_search`. |
+| `deployment:persona-prefix` | 0 | static | Persona body from PERSONA.md (frontmatter stripped). Skipped when the spawn provider already mounted it via `request.persona`. |
+| `harness:identity` | `HARNESS_IDENTITY` | static | Shadowed with `You are an AI agent.` so the harness opener cannot contradict the persona. |
 | `persona:protocol` | 483 | static | `prompts/protocol.md`: dual-process contract, state/memory/closing contracts. |
+
+**The system prompt is deliberately static.** State, boot memory and the memory index live in an injected `[persona context — internal state, not user input]` message instead, appended at the END of the step input:
+
+| Block | Content |
+|---|---|
+| `## Current state` | Rendered STATE summary — base/max, palam, relations, active buffs. Internal dashboard only: the protocol forbids speaking numbers/stat names in visible text; state shapes tone, not content. |
+| boot nodes | MEMORY.md `Boot URIs` expanded to full node bodies. |
+| `## Memory index` | Compact catalog: `- uri (pN [alias→x]) — disclosure [triggers: a, b]`. Capped at 30 rows by priority; overflow reachable via `memory_search`. |
+
+Why not prompt sections: editing the system prompt invalidates the provider's prompt cache for everything after it — the entire conversation included — so every `state_delta`, settle or memory write made the next request pay full price for the whole context. Measured on a real session: two consecutive steps cost 31,456 and 35,677 fresh input tokens (only 256 cached) right after a settle and a `memory_create`. As a trailing message, only the tail is new and the stable prefix stays cacheable.
+
+Refresh rule: the block is injected when it could have gone stale — at the start of every turn, and immediately after any tool in `MUTATORS` (`memory_create/update/delete/alias`, `state_delta`, `state_settle`, `state_note`, `buff_apply`, `buff_clear`). So the state the model reads is never a turn-old snapshot.
 
 Turn hooks (`agent/pre-step`, `agent/turn-stopping`):
 
@@ -126,9 +136,14 @@ Turn hooks (`agent/pre-step`, `agent/turn-stopping`):
 - **Memory recall** — each step scans the newest user-visible message for node `triggers` (case-insensitive, ≤3 hits, once per URI per session). Hits arrive as `[persona recall] memory://path` + body in the step's input — already-read memory, not a tool call.
 - **Grounding** — when `config.groundingInterval > 0`, `prompts/grounding.md` is injected every Nth step.
 - **Closing reflection** — when `config.closingReflection` matches the mode (`one-shot` default), turn end queues `prompts/closing.md` as a followup turn. `state_settle` is unconditional; `memory_create` is conditional — write only when something is worth keeping, never a filler note. The closing prompt also asks the agent to tidy a bloated index (merge/reprioritize/alias/delete).
-- **One-shot output rewind** — the reflection adds a housekeeping turn, which would make `readResult` return its chatter instead of the task answer. The `persona` provider wraps `run.result`: if a `[persona closing]` user message exists in the session log, `output` is replaced with the last assistant message BEFORE it.
+- **One-shot output rewind** — the reflection adds a housekeeping turn, which would make `readResult` return its chatter instead of the task answer. The `persona` provider wraps `run.result`: for a staged (critical) turn it returns the first visible text AFTER the last `inner_commit` call — never the monologue; for a routine turn, the last assistant message before the `[persona closing]` injection.
 
-Dual-process protocol (prompts/protocol.md): every reply opens with a `<thinking>…</thinking>` block in the text (inner pass: `STATE:` verbatim copy, `TRIGGERS:`, `REFUSAL:`, `VOICE:`), then the outer persona voice. The tags are the canonical carrier — emitted on every runtime, including those with a native reasoning channel (which may additionally carry the same pass). The leak scanner strips `<thinking>` contents before matching, so state numbers/URIs inside the tags never trigger an OOC correction. State deltas are recorded at the moment they happen, not batched.
+Dual-process protocol (prompts/protocol.md): step 0 of every turn runs the gate (`assessTurn`) and injects a mode notice that fixes the turn's shape before anything is generated.
+
+- `[persona 1-step turn]` — routine: one step, reply directly, no `<thinking>`.
+- `[persona 2-step turn]` — critical: step 1 emits only the `<thinking>…</thinking>` monologue (`STATE:` verbatim copy from the context block, `TRIGGERS:`, `REFUSAL:`, `VOICE:`, then free expansion) and calls `inner_commit`; the tool returns the stage-2 transform directive, and step 2 produces the reply. Staging is structural: the monologue cannot be skipped, and the transform gets its own directive.
+
+The staged shape costs one extra request per critical turn; a routine turn is a single request. The leak scanner strips `<thinking>` contents before matching, so state numbers/URIs inside the tags never trigger an OOC correction. State deltas are recorded at the moment they happen, not batched.
 
 **Immersion boundary** — the persona never surfaces the plugin machinery in visible text: no `memory://` URIs, `.persona` paths, filenames, section names, tool names, or state numbers. Two-layer enforcement: (1) the protocol's Immersion boundary section forbids it; (2) a `session/event` listener scans each `assistant/message` for leak markers and injects a `[persona ooc]` correction into the next step when found — the leaked words are already said, but the next reply re-enters character. `<thinking>…</thinking>` contents are stripped before scanning — mechanism vocabulary is legal inside the tags.
 
@@ -140,6 +155,8 @@ Config (`cordis.patch.yml` row `persona-system`, user patch can override):
 | `groundingInterval` | `0` | Steps between grounding injections (0 = off) |
 | `closingReflection` | `one-shot` | `one-shot` / `always` / `never` |
 | `providerName` | `persona` | `ctx.subagents` provider name |
+| `criticalGate` | `auto` | `auto` (assess the turn) / `always` (every turn critical) / `never` (every turn routine) |
+| `criticalKeywords` | `[]` | Extra keywords that force a critical turn, on top of the built-in zh/en tables |
 
 Binding persistence (resume after restart): `/persona use` writes `.persona/.bindings/<sessionId>.json`; on the next `agent/created` the plugin reads it back and re-equips as `mode: 'session'`. **Do not reintroduce a `persona/bound` session event** — live `Session.append` cannot mark an event `ignorable: true`, so an out-of-tree event type persists as a required unknown and `validateStoredEvents` refuses to restore the whole session (session becomes unopenable). Spawned children don't need the ledger: their `subagent/descriptor` carries the `persona-profile:` marker.
 

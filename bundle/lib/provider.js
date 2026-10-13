@@ -86,11 +86,27 @@ export function createPersonaProvider(name, innerName, resolveCwd, libraryDir, c
             && (e.data?.content ?? []).some(b => b?.type === 'text' && b.text?.startsWith('[persona closing]'))
           const cut = evs.findIndex(isClosing)
           const taskEvs = cut < 0 ? evs : evs.slice(0, cut)
-          // The task answer is the last assistant message before the closing
-          // reflection turn — not the reflection's housekeeping chatter.
-          const prior = [...taskEvs].reverse()
-            .find(e => e.type === 'assistant/message' && e.data?.message?.content?.length)
-          return prior ? { ...res, output: prior.data.message.content } : res
+          const blocksOf = e => e.data?.message?.content ?? []
+          const hasVisible = e => e.type === 'assistant/message'
+            && blocksOf(e).some(b => b?.type === 'text'
+              && (b.text ?? '').replace(/<thinking>[\s\S]*?<\/thinking>/g, '').trim())
+          // A critical turn is staged: step 1 is the <thinking> monologue plus
+          // an inner_commit call, so the answer is the first visible text AFTER
+          // that call — never the monologue, never the closing chatter.
+          let reply
+          for (let i = taskEvs.length - 1; i >= 0 && !reply; i--) {
+            if (!blocksOf(taskEvs[i]).some(b => b?.type === 'tool-call' && b.name === 'inner_commit')) continue
+            for (let j = i + 1; j < taskEvs.length; j++) {
+              if (hasVisible(taskEvs[j])) { reply = taskEvs[j]; break }
+            }
+          }
+          // Routine turn: the answer is simply the last thing said before the
+          // closing reflection turn.
+          if (!reply) {
+            reply = [...taskEvs].reverse()
+              .find(e => e.type === 'assistant/message' && e.data?.message?.content?.length)
+          }
+          return reply ? { ...res, output: reply.data.message.content } : res
         } catch { return res }
       })
       return { ...run, result }

@@ -55,21 +55,23 @@ function stateRules(state = {}) {
 }
 
 /**
- * The notice injected on the FIRST step of a turn. Both modes are single-call;
- * only the response's segment count differs.
- * @param mode - 'two' (critical) | 'one' (routine)
+ * The notice injected on the FIRST step of a turn — this is step 0 of the
+ * the gate, and it fixes the turn's shape before anything is generated.
+ * @param mode - 'staged' (critical: monologue step, then reply step) | 'one' (routine: reply only)
  */
 export function modeNotice({ mode, mbti = '', state = {}, reason = '' }) {
   if (mode === 'one') {
-    return `[persona 1-segment turn — routine] Reply directly, in voice. No <thinking> block, no preamble, no self-check.`
+    return `[persona 1-step turn — routine] Reply directly, in voice. No <thinking> block, no preamble, no self-check.`
   }
-  return `[persona 2-segment turn — CRITICAL: ${reason}]
-This turn gets deliberation. In ONE response, two segments — the block FIRST, before any tool call or investigation.
+  return `[persona 2-step turn — CRITICAL: ${reason}]
+This turn gets deliberation, and the deliberation comes first: this step produces the inner monologue and NOTHING else.
 
-Segment 1 — begin your output with <thinking>…</thinking>. Write it from what is already in this prompt, your memory index, and the conversation so far. Do NOT go reading files, logs, or session archives to fill it in — if something is missing, say so in the block and go look AFTER it.
+Write <thinking>…</thinking> now. Then call inner_commit — that ends this step and hands you the transform directive for the reply.
+
+Write the block from what is already in your persona context, your memory index, and the conversation so far. Do NOT go reading files, logs, or session archives to fill it in — if something is missing, say so in the block and go look AFTER the reply.
 
 The block opens with four labeled lines, then expands freely if the turn is loaded:
-STATE: copy the current persona:state summary VERBATIM (base, palam, relations, active buffs)
+STATE: copy the Current state block from your persona context VERBATIM (base, palam, relations, active buffs)
 TRIGGERS: what this input touches — values, wounds, stored memories
 REFUSAL: what your persona will NOT say here
 VOICE: tone + length for this reply, from Layer 2
@@ -80,7 +82,21 @@ ${mbtiRules(mbti)}
 State pressure on this thought:
 ${stateRules(state)}
 
-Segment 2 — the reply, after </thinking>. It carries the monologue's FEELING; its contents may be edited, withheld, or sharpened — you say what you'd say, not everything you thought. Tool calls, if the task truly needs them, come after the reply.
+Output the block and the inner_commit call. No reply text in this step — the reply is the next one.
+The block never counts against the immersion boundary: numbers and mechanism words are legal inside it.`
+}
 
-The block never counts against the immersion boundary (numbers and mechanism words are legal inside it); the reply carries none of them.`
+/**
+ * Stage-2 directive, returned as the inner_commit result. This is the second
+ * generation of the turn: the monologue is already committed, and the job now
+ * is the transform — same feeling, said out loud.
+ */
+export function stageTwoPrompt({ name }) {
+  return `[persona stage 2 of 2] Inner monologue committed. Now transform it into your reply.
+
+Convert that monologue into what you actually say:
+- Layer 2 Voice rules are in force: tone, sentence shape, taboos, default length.
+- The monologue's FEELING carries into the reply; its CONTENTS may be edited, withheld, or sharpened — you say what you'd say, not everything you thought.
+- Banned in the reply: numbers, stat names, psych jargon, mechanism nouns, the word "monologue", file paths, tool names. Embody, don't report.
+- Output ONLY the reply — no <thinking>, no preamble.`
 }
