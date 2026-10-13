@@ -29,7 +29,8 @@ Phase A · Collect (one question at a time)
              ("ok" adopts it):
         ① name legalized to ^[\w-]+$; candidates confirmed by the user
         ② who it is       one-line identity + non-negotiable principles + how it thinks
-        ③ how it talks    register / sentence habits / taboos / default length
+        ③ how it talks    register / sentence habits / taboos / default length,
+                          plus typical scenes for the reply examples (≥3 pairs)
         ④ inner dynamics  emotional baseline, starting stance toward the user,
                           optional MBTI / interests
 Phase B · Draft  Show PERSONA.md + STATE.md + memory/core/identity.md in full, and say
@@ -43,9 +44,9 @@ Phase D · Close out
     └─ no  → point at /persona use <name> or /persona spawn <name>
 ```
 
-**Phase A · Collect.** Look at what exists first (`persona_list`, or read `.persona/`). Then one question per turn — a wall of questions gets skimmed answers. Phase complete when you could write every Layer 1/2 field and the Layer 3 field list without inventing anything the user has not said or approved.
+**Phase A · Collect.** Look at what exists first (`persona_list`, or read `.persona/`). Then one question per turn — a wall of questions gets skimmed answers. Phase complete when you could write every Layer 1/2 field (including three or more reply examples) and the Layer 3 field list without inventing anything the user has not said or approved.
 
-**Phase B · Draft.** Show the *full text* of the three files, not a summary: the user is confirming the exact bytes that will land. Phase complete when the user approves the text or names the changes; apply the changes and re-show only what changed.
+**Phase B · Draft.** Show the *full text* of the three files, not a summary: the user is confirming the exact bytes that will land. Phase complete when the user approves the text or names the changes; apply the changes and re-show only what changed. The draft is not finished until Layer 2 carries a non-empty `examples` subsection (≥3 pairs) — rules alone are an incomplete voice.
 
 **Phase C · Save.** One call, whole archive:
 
@@ -73,7 +74,11 @@ persona_save({
 
 Layer 1 (Core Self) must answer: identity, non-negotiable values, decision style, emotional baseline, boundaries. Vague adjectives are worthless; write *stances*.
 
+The decision style is where the thinking loop is personalized: say how this persona perceives a room, what it actually wants underneath, what it weighs against what, and where it goes wrong (over-perceives slights? mistakes wanting for duty? rushes past the weighing?). The runtime loop is fixed — perceive, aim, want, weigh, expect, choice, reason — so this field is the only place a persona's *own* distortions enter it.
+
 Layer 2 (Voice) must contain *observable* rules: sentence shapes, tics, taboos, default length. Test each rule by asking "could a reader verify this in one reply?"
+
+Layer 2 also carries the `examples` subsection — 3–5 labeled `situation → reply` pairs in the persona's voice. Reuse the user's own lines verbatim when they gave any; otherwise draft from the register just agreed and get them approved. These are the *baseline* voice: `STATE.md` re-tunes them like every other rule in this layer, so a pair must not promise warmth the stance bands can contradict. Mark them as patterns to absorb, never lines to reuse — a persona that recites its examples verbatim has no voice of its own.
 
 Layer 3 declares STATE.md fields. Design palam fields around what should crystallize: `emit` the juel that will feed the permanent stat/mark this experience *should* change.
 
@@ -108,6 +113,8 @@ triggers:
 ## Anti-patterns
 
 - Describing behavior only in Layer 1 while Layer 2 stays generic — voice is where consistency actually shows.
+- Layer 2 with rules but no `examples` — rules say what the voice does; only a pair shows what it sounds like. A draft without them is unfinished.
+- Example replies that ignore the stance bands — the examples are baseline voice, so an unconditionally warm pair contradicts a cold `relations` and teaches the persona to over-familiarize.
 - A palam field that emits nothing, or a stat with unreachable `requires`.
 - Boot memory that explains the persona to itself — boot URIs should hold *identity anchors*, not documentation.
 - Memory written as objective decrees or imperative rules ("必须/禁止/【铁律】") — they are revocable experiences, not laws.

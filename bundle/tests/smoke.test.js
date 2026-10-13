@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { splitFrontmatter, parseYaml } from '../lib/frontmatter.js'
-import { createPersona, renderPersonaPrefix, renderPersonaBody, stripPersonaText, listPersonas, libraryRoot } from '../lib/persona.js'
+import { createPersona, renderPersonaPrefix, renderPersonaBody, stripPersonaText, listPersonas, libraryRoot, BUNDLE_ROOT } from '../lib/persona.js'
 import { readBinding, writeBinding, clearBinding } from '../lib/bindings.js'
 import { appendRoute } from '../lib/route-log.js'
 import { equipAgent } from '../lib/equip.js'
@@ -66,6 +66,17 @@ const lastRoute = (sid) => JSON.parse(readFileSync(routesFile(sid), 'utf8').trim
 test('persona skeleton exists', () => {
   assert.equal(readFileSync(join(pd, 'PERSONA.md'), 'utf8').includes('alice'), true)
   assert.equal(listPersonas(tmp)[0].name, 'alice')
+})
+
+test('PERSONA template: Layer 2 carries the examples contract', () => {
+  // The few-shot block is authored prose, so only the template can carry it —
+  // there is no runtime code path to assert. What must not regress: the field
+  // exists, it is declared baseline (STATE re-tunes), and it is declared
+  // absorb-not-reuse so a persona does not recite its own examples.
+  const tpl = readFileSync(join(BUNDLE_ROOT, 'templates', 'PERSONA.md'), 'utf8')
+  assert.match(tpl, /- \*\*examples\*\*: 3–5 labeled pairs/)
+  assert.match(tpl, /BASELINE voice — `STATE\.md` re-tunes it/)
+  assert.match(tpl, /Patterns to absorb, never lines to reuse/)
 })
 
 test('memory CRUD + search + alias', () => {
@@ -217,8 +228,8 @@ test('gate prompts: imperative, signals, stage-1 directive', () => {
   // set content truthfulness and only shade the voice.
   assert.match(s2, /first reference for how you sound/)
   assert.match(s2, /content truthfulness/)
-  // The stage-1 VOICE line carries the same precedence into the monologue.
-  assert.match(one, /VOICE: tone \+ length.*first reference/)
+  // The stage-1 CHOICE line carries the same precedence into the monologue.
+  assert.match(one, /CHOICE: .*first reference/)
   // The routine shape and the two verdict acks.
   assert.match(REPLY_DIRECTIVE, /No <thinking> block/)
   assert.match(REPLY_DIRECTIVE, /routine/)
@@ -229,6 +240,72 @@ test('gate prompts: imperative, signals, stage-1 directive', () => {
   assert.match(GATE_ACK_ROUTINE, /routine/)
   // The mode notice is gone: the model rules the shape, code does not.
   assert.equal('modeNotice' in criticalPrompts, false)
+})
+
+test('quick pass: the gate carries perceive + aim, and EXPECT rules the verdict', () => {
+  const { gateInstruction, MONOLOGUE_LABELS } = criticalPrompts
+  const gate = gateInstruction({ signals: '- speaker: first contact — no relation record yet' })
+  // The three quick-pass questions are asked before the verdict.
+  assert.match(gate, /PERCEIVE: what is actually happening/)
+  assert.match(gate, /AIM: what does this reply need to achieve/)
+  assert.match(gate, /EXPECT: if you answered on reflex/)
+  // The call carries both fields, so the quick pass is recorded, not implied.
+  assert.match(gate, /persona_gate\(\{ critical: true\|false, perceive: "<what is happening>", aim: "<what this reply must achieve>"/)
+  // The semantic contract: routine = terminal cognition, critical = sketch.
+  assert.match(gate, /on a routine turn\s+they are the whole of this turn's thinking/)
+  assert.match(gate, /on a critical turn they are the\s+sketch the monologue deepens and may overrule/)
+  // Forced modes still ask for the quick pass — a forced verdict is not a
+  // licence to skip thinking.
+  assert.match(gateInstruction({ forced: 'always' }), /PERCEIVE: what is actually happening/)
+  // WANT is deliberately NOT a gate output: it lives in the monologue only.
+  assert.doesNotMatch(gate, /persona_gate\(\{[^)]*want/)
+  assert.equal(MONOLOGUE_LABELS.includes('WANT'), true)
+})
+
+test('deep pass: the monologue opens with STATE + the seven aspects, in order', () => {
+  const { stageOnePrompt, MONOLOGUE_LABELS } = criticalPrompts
+  const one = stageOnePrompt({ name: 'alice', mbti: 'INTP', state: {} })
+  // Eight labeled lines, seven aspects, canonical order.
+  assert.deepEqual(MONOLOGUE_LABELS, ['STATE', 'PERCEIVE', 'AIM', 'WANT', 'WEIGH', 'EXPECT', 'CHOICE', 'REASON'])
+  assert.match(one, /eight labeled lines/)
+  for (const label of MONOLOGUE_LABELS) assert.match(one, new RegExp(`^${label}: `, 'm'), `${label} line missing`)
+  // Order is the contract, not just presence.
+  const positions = MONOLOGUE_LABELS.map(l => one.indexOf(`\n${l}: `))
+  assert.deepEqual(positions, [...positions].sort((a, b) => a - b))
+  // The retired labels are absorbed, not kept as extra lines.
+  for (const dead of ['TRIGGERS:', 'REFUSAL:', 'VOICE:']) assert.doesNotMatch(one, new RegExp(`^${dead}`, 'm'))
+  // Responsibilities survive the merge: triggers under PERCEIVE, the refusal
+  // under WEIGH, tone/length under CHOICE.
+  assert.match(one, /PERCEIVE: .*what it touches \(values, wounds, stored memories\)/)
+  assert.match(one, /WEIGH: .*what you will NOT say goes here/)
+  assert.match(one, /CHOICE: .*tone \+ length/)
+  // The quick pass is already in the conversation — nothing is re-embedded, and
+  // the sketch is explicitly overrulable.
+  assert.match(one, /The quick pass you ruled on is in this conversation/)
+  assert.match(one, /you may overrule the sketch/)
+  // A thin block still commits.
+  assert.match(one, /A block that skips aspects still commits/)
+})
+
+test('monologue label check is soft: missing labels ride the stage-2 directive', () => {
+  const { missingMonologueLabels, stageTwoPrompt } = criticalPrompts
+  const full = ['STATE', 'PERCEIVE', 'AIM', 'WANT', 'WEIGH', 'EXPECT', 'CHOICE', 'REASON']
+    .map(l => `${l}: x`).join('\n')
+  assert.deepEqual(missingMonologueLabels(full), [])
+  // Partial: only the absent ones are named, in canonical order.
+  assert.deepEqual(missingMonologueLabels('STATE: x\nPERCEIVE: y\nCHOICE: z'), ['AIM', 'WANT', 'WEIGH', 'EXPECT', 'REASON'])
+  // Indented labels count — models indent inside a block.
+  assert.deepEqual(missingMonologueLabels('  STATE: x\n  PERCEIVE: y\n  AIM: a\n  WANT: b\n  WEIGH: c\n  EXPECT: d\n  CHOICE: e\n  REASON: f'), [])
+  // A label mentioned mid-sentence is not a labeled line.
+  assert.equal(missingMonologueLabels('I should WEIGH this later').includes('WEIGH'), true)
+  // Empty monologue (log unreadable) reports nothing to fix — no false alarm.
+  assert.deepEqual(missingMonologueLabels(''), ['STATE', 'PERCEIVE', 'AIM', 'WANT', 'WEIGH', 'EXPECT', 'CHOICE', 'REASON'])
+  // The notice is appended, singular/plural correct, and absent when complete.
+  const thin = stageTwoPrompt({ name: 'alice', monologue: 'STATE: x', missing: ['WANT'] })
+  assert.match(thin, /Your monologue skipped WANT — the reply still has to answer it\./)
+  const two = stageTwoPrompt({ name: 'alice', monologue: 'STATE: x', missing: ['WANT', 'WEIGH'] })
+  assert.match(two, /skipped WANT, WEIGH — the reply still has to answer them\./)
+  assert.doesNotMatch(stageTwoPrompt({ name: 'alice', monologue: full }), /skipped/)
 })
 
 test('relation stance: every value has a band, zero included', () => {
@@ -326,14 +403,20 @@ test('equip routine verdict: the reply directive arrives at the next step', asyn
   equipAgent(fake.ctx, agent, pd, 'alice',
     { criticalGate: 'auto', groundingInterval: 0, closingReflection: 'never' }, 'session')
   await runPreStep(fake, { turn: 1, step: 1, messages: [userMessage('列一下文件')] })
-  const ack = await fake.tools.get('persona_gate').execute({ critical: false, reason: 'small talk' }, { agent })
+  const ack = await fake.tools.get('persona_gate').execute(
+    { critical: false, perceive: '主人要我列文件', aim: '给一份清单', reason: 'small talk' }, { agent })
   assert.match(ack, /routine/)
   const next = await runPreStep(fake, { turn: 1, step: 2, messages: [] })
   assert.match(injectedText(next), /No <thinking> block/)
   // Injected once: a later step in the same turn does not re-issue it.
   const later = await runPreStep(fake, { turn: 1, step: 3, messages: [] })
   assert.doesNotMatch(injectedText(later), /No <thinking> block/)
-  assert.equal(lastRoute('session-routine').verdict, 'routine')
+  const line = lastRoute('session-routine')
+  assert.equal(line.verdict, 'routine')
+  // The quick pass is on the record: on a routine turn it IS the thinking.
+  assert.equal(line.perceive, '主人要我列文件')
+  assert.equal(line.aim, '给一份清单')
+  assert.deepEqual(Object.keys(line).sort(), ['aim', 'at', 'perceive', 'reason', 'signals', 'step', 'turn', 'verdict'])
 })
 
 test('equip critical verdict: stage 1 carries the model reason, the log records it', async () => {
@@ -353,9 +436,52 @@ test('equip critical verdict: stage 1 carries the model reason, the log records 
   const line = lastRoute('session-critical')
   assert.equal(line.verdict, 'critical')
   assert.equal(line.reason, 'the 圆 word landed')
+  // No quick pass written → the log omits the fields rather than logging empty
+  // strings, so a pre-existing line and a thin one keep the same base shape.
   assert.deepEqual(Object.keys(line).sort(), ['at', 'reason', 'signals', 'step', 'turn', 'verdict'])
   assert.equal(line.turn, 1)
   assert.match(line.signals, /input: "你这几天都不理我"/)
+})
+
+test('inner_commit: the monologue rides stage 2, and a thin block is reported not rejected', async () => {
+  const agent = fakeAgent('session-stage2')
+  const fake = fakeAgentCtx()
+  equipAgent(fake.ctx, agent, pd, 'alice',
+    { criticalGate: 'auto', groundingInterval: 0, closingReflection: 'never' }, 'session')
+  await runPreStep(fake, { turn: 1, step: 1, messages: [userMessage('你这几天都不理我')] })
+  await fake.tools.get('persona_gate').execute({ critical: true, reason: 'loaded' }, { agent })
+  // The monologue is written as a literal <thinking> span; the stream transform
+  // turns it into a reasoning block, and request history strips that block — so
+  // inner_commit re-reads the raw log to carry it into stage 2.
+  const monologue = 'STATE: energy 20/100\nPERCEIVE: 主人说我几天不理他\nAIM: 让他知道我在\nCHOICE: 短、承认、不辩解\nREASON: 我在乎'
+  agent.session.snapshotEvents = () => ([
+    { type: 'assistant/message', data: { message: { content: [{ type: 'reasoning', text: monologue }] } } },
+  ])
+  const directive = await fake.tools.get('inner_commit').execute({}, { agent })
+  assert.match(directive, /stage 2 of 2/)
+  assert.match(directive, /the reader cannot see it/)
+  assert.match(directive, /PERCEIVE: 主人说我几天不理他/)
+  // Soft check: WANT, WEIGH and EXPECT were skipped, so the transform is told
+  // to answer them — the commit itself still succeeds and stage 2 still renders.
+  assert.match(directive, /Your monologue skipped WANT, WEIGH, EXPECT — the reply still has to answer them\./)
+  assert.match(directive, /Output ONLY the reply/)
+})
+
+test('inner_commit: a complete monologue carries no skip notice', async () => {
+  const agent = fakeAgent('session-stage2-full')
+  const fake = fakeAgentCtx()
+  equipAgent(fake.ctx, agent, pd, 'alice',
+    { criticalGate: 'auto', groundingInterval: 0, closingReflection: 'never' }, 'session')
+  await runPreStep(fake, { turn: 1, step: 1, messages: [userMessage('hi')] })
+  await fake.tools.get('persona_gate').execute({ critical: true, reason: 'loaded' }, { agent })
+  const full = ['STATE', 'PERCEIVE', 'AIM', 'WANT', 'WEIGH', 'EXPECT', 'CHOICE', 'REASON']
+    .map(l => `${l}: x`).join('\n')
+  agent.session.snapshotEvents = () => ([
+    { type: 'assistant/message', data: { message: { content: [{ type: 'reasoning', text: full }] } } },
+  ])
+  const directive = await fake.tools.get('inner_commit').execute({}, { agent })
+  assert.doesNotMatch(directive, /skipped/)
+  assert.match(directive, /STATE: x/)
 })
 
 test('equip missed verdict: a turn that never ruled is logged, not interrupted', async () => {

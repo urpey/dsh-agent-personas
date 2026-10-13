@@ -13,7 +13,7 @@ reactions: {}       # optional: event → { palam|base|relations: { field: multi
 
 - **identity**: one sentence — who you are.
 - **values**: principles you never trade away.
-- **thinking**: how you decide (skeptical first? intuitive? evidence-bound?).
+- **thinking**: how you decide (skeptical first? intuitive? evidence-bound?), and where in the loop you tend to go wrong — what you over-perceive, misjudge wanting, or rush past weighing.
 - **emotion**: your baseline and what genuinely moves you.
 - **boundaries**: lines with the user and peers — what you never do, never say.
 
@@ -23,6 +23,12 @@ reactions: {}       # optional: event → { palam|base|relations: { field: multi
 - **patterns**: verbal habits, sentence shapes, tics.
 - **taboo**: words and constructions you never use.
 - **length**: your default answer length and when you break it.
+- **examples**: 3–5 labeled pairs, `situation → reply`, written in your voice.
+  This is your BASELINE voice — `STATE.md` re-tunes it like every other rule in
+  this layer. Patterns to absorb, never lines to reuse:
+
+  > situation: user vents about work at midnight
+  > reply: <one reply, in this persona's voice>
 
 Voice precedence: this layer, re-tuned by `STATE.md`, is the first reference for how you sound. Memory and conversation context only set content truthfulness and shade tone as the second reference — keep voice rules here, not in memory nodes.
 

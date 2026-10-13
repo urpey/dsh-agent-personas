@@ -263,9 +263,21 @@ export function gateInstruction({ signals = '', forced } = {}) {
       ? 'The gate is forced ROUTINE for this turn — rule critical:false regardless of what follows.'
       : 'Does this turn deserve deliberation? Apply the gate rule from your protocol.'
   return `[persona gate] ${rule}
+Before you rule, run the quick pass — perceive, aim, expect:
+- PERCEIVE: what is actually happening in this input? One or two sentences.
+- AIM: what does this reply need to achieve?
+- EXPECT: if you answered on reflex, what would land on the speaker — would it
+  miss, wound, or contradict what you know? An expected miss is the strongest
+  reason this turn is loaded. Borderline → routine.
+
 Your only output this step is ONE call — no reply text, no <thinking> yet:
 
-  persona_gate({ critical: true|false, reason: "<why, in your own words>", delta: { palam: { anger: +8 }, event: "insult" } })
+  persona_gate({ critical: true|false, perceive: "<what is happening>", aim: "<what this reply must achieve>", reason: "<why this verdict, in your own words>", delta: { palam: { anger: +8 }, event: "insult" } })
+
+\`perceive\` and \`aim\` are the quick pass, written down — one or two sentences
+each, no expansion into a monologue. They are recorded, and on a routine turn
+they are the whole of this turn's thinking; on a critical turn they are the
+sketch the monologue deepens and may overrule.
 
 \`delta\` is this turn's ledger — what already landed on you while you read the
 input, in the same shape \`state_delta\` takes (optional). Record it here, in the
@@ -286,9 +298,31 @@ export const GATE_ACK_CRITICAL = 'Verdict recorded: critical. The stage-1 direct
 export const GATE_ACK_ROUTINE = 'Verdict recorded: routine. The reply directive arrives in your next input.'
 
 /**
+ * The monologue's required labels — STATE plus the seven aspects, in the order
+ * the block must open with. One owner: `stageOnePrompt` renders from this list
+ * and `missingMonologueLabels` checks against it, so the directive and the check
+ * can never drift apart.
+ */
+export const MONOLOGUE_LABELS = ['STATE', 'PERCEIVE', 'AIM', 'WANT', 'WEIGH', 'EXPECT', 'CHOICE', 'REASON']
+
+/**
+ * Labels a committed monologue never used. Soft check only: a thin block is
+ * reported to the transform, never rejected — a hard gate would buy a retry
+ * loop for a prompt-shape miss the reply can still absorb.
+ */
+export function missingMonologueLabels(monologue = '') {
+  const text = String(monologue)
+  return MONOLOGUE_LABELS.filter(label => !new RegExp(`^\\s*${label}\\s*:`, 'im').test(text))
+}
+
+/**
  * Stage-1 directive (the monologue step) — the shape a critical verdict earns.
  * The model's own `reason` opens it, so the block starts from the model's
  * reading of the turn rather than a code-generated label.
+ *
+ * The block is the deep pass: STATE plus the seven aspects (perceive, aim, want,
+ * weigh, expect, choice, reason). The quick pass it deepens is already in the
+ * conversation as the persona_gate call — nothing is re-embedded here.
  *
  * @param opts.name   - persona name (call-site symmetry with stageTwoPrompt; the
  *                      directive addresses the model already wearing the persona)
@@ -303,13 +337,23 @@ This turn gets deliberation, and the deliberation comes first: this step produce
 
 Write <thinking>…</thinking> now. Then call inner_commit — that ends this step and hands you the transform directive for the reply.
 
-Write the block from what is already in your persona context, your memory index, and the conversation so far. Do NOT go reading files, logs, or session archives to fill it in — if something is missing, say so in the block and go look AFTER the reply.
+Write the block from what is already in your persona context, your memory index, and the conversation so far. Do NOT go reading files, logs, or session archives to fill it in — if something is missing, say so in the block and go look AFTER the reply. A block that skips aspects still commits — the transform will be told to answer them in the reply.
 
-The block opens with four labeled lines, then expands freely if the turn is loaded:
+The block opens with eight labeled lines — STATE plus the seven aspects, in this
+order — then expands freely if the turn is loaded:
 STATE: copy the Current state block from your persona context VERBATIM (base, palam, relations, active buffs)
-TRIGGERS: what this input touches — values, wounds, stored memories
-REFUSAL: what your persona will NOT say here
-VOICE: tone + length for this reply — Layer 2 as re-tuned by STATE: persona and state are the first reference for how you sound; memory/context the second
+PERCEIVE: what is actually happening right now — the literal input and what it carries; who is speaking; what it touches (values, wounds, stored memories)
+AIM: what this reply needs to achieve — what you want out of this exchange
+WANT: the deeper want under it — the hunger, need, or fear driving this, whether or not it is said
+WEIGH: the trade — cost and gain of each way you could answer, including the ones you reject (what you will NOT say goes here)
+EXPECT: how the speaker most likely takes it, and what you expect of yourself if it lands otherwise
+CHOICE: what you will actually say — tone + length, Layer 2 as re-tuned by STATE (its \`examples\` are calibration, never lines to lift): persona and state are the first reference for how you sound; memory/context the second
+REASON: the root of the action — the motive this comes from, and how it sits with your values and boundaries
+
+The quick pass you ruled on is in this conversation, in your own words. This block
+deepens it: PERCEIVE, AIM and CHOICE are re-derived with the whole turn in view,
+and you may overrule the sketch — if the verdict itself turns out wrong now, say
+so here, never by silently switching shapes.
 
 Inner-monologue tuning (MBTI: ${mbti || 'undeclared'}):
 ${mbtiRules(mbti)}
@@ -330,14 +374,20 @@ The block never counts against the immersion boundary: numbers and mechanism wor
  * synthetic reasoning blocks before the next generation, so without it the
  * transform would have nothing to transform. It stays inside this tool result —
  * the one channel tagged spans still reach the next step through.
+ *
+ * `missing` is the soft label check (see missingMonologueLabels): labels the
+ * monologue skipped. It never blocks the commit — the transform is asked to
+ * answer them in the reply instead, so a thin monologue costs a line of
+ * instruction rather than a retry loop.
  */
-export function stageTwoPrompt({ name, monologue = '' }) {
+export function stageTwoPrompt({ name, monologue = '', missing = [] }) {
   return `[persona stage 2 of 2] Inner monologue committed. Now transform it into your reply.
 ${monologue ? `
 Your inner monologue — the reader cannot see it:
 ${monologue}
+` : ''}${missing.length ? `
+Your monologue skipped ${missing.join(', ')} — the reply still has to answer ${missing.length > 1 ? 'them' : 'it'}.
 ` : ''}
-
 Convert that monologue into what you actually say:
 - Layer 2 Voice rules are in force: tone, sentence shape, taboos, default length — re-tuned by STATE. Persona and state are the first reference for how you sound; memory and context only set content truthfulness, and shade tone as the second reference.
 - The monologue's FEELING carries into the reply; its CONTENTS may be edited, withheld, or sharpened — you say what you'd say, not everything you thought.

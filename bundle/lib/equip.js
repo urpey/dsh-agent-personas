@@ -13,7 +13,7 @@ import * as state from './state-store.js'
 import { renderStateSummary } from './state-store.js'
 import { splitFrontmatter } from './frontmatter.js'
 import { gateInstruction, signalsLine, stageOnePrompt, stageTwoPrompt, mergeReactions,
-         GATE_ACK_CRITICAL, GATE_ACK_ROUTINE, REPLY_DIRECTIVE } from './critical-prompts.js'
+         missingMonologueLabels, GATE_ACK_CRITICAL, GATE_ACK_ROUTINE, REPLY_DIRECTIVE } from './critical-prompts.js'
 import { appendRoute } from './route-log.js'
 import { transformThinkingStream, stripThinkingFromMessages } from './thinking-tags.js'
 
@@ -225,6 +225,8 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
    *  rewrite STATE.md (dropping comments) to record nothing. */
   const hasDeltaFields = (d) => !!d && typeof d === 'object'
     && ['base', 'palam', 'relations'].some(l => d[l] && typeof d[l] === 'object' && Object.keys(d[l]).length > 0)
+  /** Optional string argument, trimmed — '' for anything else. */
+  const str = (v) => (typeof v === 'string' ? v.trim() : '')
   const T = (def) => {
     if (MUTATORS.has(def.name)) {
       const inner = def.execute
@@ -373,7 +375,10 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
       // The transform carries its own source: history strips synthetic
       // reasoning before the next request, so the monologue has to ride the
       // tool result — this makes stage 2 self-contained rather than lucky.
-      return stageTwoPrompt({ name, monologue: lastMonologue() })
+      // The label check is soft: a block that skipped aspects still commits,
+      // and the transform is told to answer them in the reply.
+      const monologue = lastMonologue()
+      return stageTwoPrompt({ name, monologue, missing: missingMonologueLabels(monologue) })
     }))
 
   // ---- persona_gate: the model's verdict, carried by a stub tool -------------
@@ -381,15 +386,21 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
   // here: the tool holds no judgment, it records the verdict the model already
   // made and hands back the directive for the next step. `reason` is the model's
   // own words and opens the stage-1 directive, so the monologue starts from its
-  // own reasoning instead of a code-generated string.
+  // own reasoning instead of a code-generated string. `perceive`/`aim` are the
+  // quick pass written down (perceive → aim → choice): on a routine turn they
+  // ARE this turn's thinking, on a critical turn they are the sketch the
+  // monologue deepens. Both are optional — a verdict never fails for a thin
+  // quick pass — but the directive asks for them and the route log records them.
   reg(agentCtx.tools.register({
     name: 'persona_gate',
-    description: 'Rule whether this turn deserves deliberation — loaded turns think first. Call it alone, before any reply text; the same call carries this turn\'s `delta` ledger entry (what already landed on you).',
+    description: 'Rule whether this turn deserves deliberation — loaded turns think first. Call it alone, before any reply text; the same call carries the quick pass (`perceive`, `aim`) and this turn\'s `delta` ledger entry (what already landed on you).',
     parameters: {
       type: 'object',
       properties: {
         critical: { type: 'boolean' },
-        reason: { type: 'string', description: 'why, in your own words — it opens the stage-1 directive' },
+        perceive: { type: 'string', description: 'the quick pass — what is actually happening in this input, one or two sentences' },
+        aim: { type: 'string', description: 'the quick pass — what this reply needs to achieve' },
+        reason: { type: 'string', description: 'why this verdict, in your own words — it opens the stage-1 directive' },
         delta: { ...DELTA_SCHEMA, description: 'this turn\'s ledger: what already landed on you while you read the input (same shape as state_delta). Omit it when the turn moved nothing.' },
       },
       required: ['critical'],
@@ -401,7 +412,9 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
     },
     execute: async (args, exec) => {
       const critical = args?.critical === true
-      const reason = typeof args?.reason === 'string' ? args.reason.trim() : ''
+      const reason = str(args?.reason)
+      const perceive = str(args?.perceive)
+      const aim = str(args?.aim)
       gateCalled = true
       awaitingMonologue = critical
       // The verdict is also the turn's ledger entry. Applying it here (before
@@ -435,6 +448,10 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
         verdict: critical ? 'critical' : 'routine',
         reason,
         signals: lastSignals,
+        // The quick pass, when the model wrote it. Absent fields are omitted so
+        // the log's base shape (and every pre-existing line) stays what it was.
+        ...(perceive ? { perceive } : {}),
+        ...(aim ? { aim } : {}),
         // Only present when a ledger entry was actually written, so the log's
         // base shape stays what it always was.
         ...(ledger ? { delta: ledger } : {}),
@@ -691,7 +708,10 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
     // wake the driver for a message the model owes itself.
     if (awaitingMonologue) {
       awaitingMonologue = false
-      try { agent.followup(userMsg(stageTwoPrompt({ name, monologue: lastMonologue() }))) } catch (e) {
+      try {
+        const monologue = lastMonologue()
+        agent.followup(userMsg(stageTwoPrompt({ name, monologue, missing: missingMonologueLabels(monologue) })))
+      } catch (e) {
         agentCtx.logger?.warn?.(`[persona:${name}] stage-2 recovery failed:`, e)
       }
       return
