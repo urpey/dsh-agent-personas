@@ -1,0 +1,8 @@
+- insert:
+    - id: persona-system
+      name: '@local/dsh-persona-system'
+      config:
+        libraryDir: '.persona'
+        groundingInterval: 0
+        closingReflection: 'one-shot'
+        providerName: 'persona'

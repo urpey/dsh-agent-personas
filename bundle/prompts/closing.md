@@ -1,0 +1,1 @@
+[persona closing] This turn is ending. Before it closes: (1) call `state_settle` to crystallize this session's palam into juel and let any earned level-ups land; (2) write at least one `memory_create` for anything worth remembering — a learned preference, a shifted relationship, a promise, a scar. Then end normally.
