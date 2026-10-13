@@ -13,11 +13,14 @@
  * Persona content lives in `<workspace>/.persona/<name>/` — never in this file.
  */
 
-import { personaExists, ensurePersona, listPersonas, libraryRoot } from './lib/persona.js'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { personaExists, ensurePersona, listPersonas, libraryRoot, savePersona, BUNDLE_ROOT } from './lib/persona.js'
 import { equipAgent } from './lib/equip.js'
 import { createPersonaProvider, pendingContinuable, pendingOneShot, takeOneShot, queueOneShot, personaRequestText, personaBodyText } from './lib/provider.js'
-import { registerCommands } from './lib/commands.js'
+import { registerCommands, equipSession } from './lib/commands.js'
 import { readBinding, clearBinding, persistBinding } from './lib/bindings.js'
+import { splitFrontmatter } from './lib/frontmatter.js'
 import { randomUUID } from 'node:crypto'
 
 /**
@@ -186,6 +189,110 @@ export default {
       const bindingNote = persistBinding(libraryRoot(cwd, cfg.libraryDir), id, args.name)
       return { mode: 'continuable', childId: id, messageId, bindingNote }
     },
+  })
+
+  // ------------------------------------------------------- authoring tools
+  // The two model-facing halves of the creation wizard (`skills/persona-authoring`).
+  // They exist because that wizard runs INSIDE a live session: an equipped
+  // session cannot write `.persona/**` with the file tools at all — the equip
+  // guard denies it (`lib/equip.js`) — so without a tool-face channel,
+  // "create a persona while running as one" would be impossible.
+  ctx.tools.register({
+    name: 'persona_save',
+    description:
+      'Create a NEW persona archive under .persona/<name>/ from an authored draft. ' +
+      'This is the only channel an agent may use to write persona files: the write/edit/bash tools are denied on .persona/**, ' +
+      'and an existing archive is never overwritten. Call it only after the user has seen the full draft and approved it. ' +
+      'files maps archive-relative paths to file text: PERSONA.md (required, opening with a --- frontmatter block), STATE.md, ' +
+      'MEMORY.md, and memory/<name>.md nodes. STATE.md and MEMORY.md are filled from the template when omitted.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Archive name under .persona/ — letters, digits, _ or - only' },
+        files: {
+          type: 'object',
+          description: 'Archive path → file text. Allowed keys: PERSONA.md, STATE.md, MEMORY.md, memory/<name>.md',
+          additionalProperties: { type: 'string' },
+        },
+      },
+      required: ['name', 'files'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: {},
+      render: (_a, v) => [{ type: 'text', text: typeof v === 'string' ? v : JSON.stringify(v, null, 2) }],
+    },
+    async execute(args, exec) {
+      const agent = exec?.agent
+      const cwd = agent ? resolveCwd(agent) : process.cwd()
+      const running = agent?.personaEquip?.name
+      // Subsumed by the existence check below whenever the archive is still on
+      // disk — but this is the case the wizard is most likely to hit, and
+      // "already exists" would not say WHY this particular archive is special.
+      // It also covers the live-but-deleted archive, which existence no longer
+      // catches.
+      if (running !== undefined && running === args.name) {
+        return { error: `"${args.name}" is the persona this session is running as — persona_save only creates new archives and never rewrites a live one` }
+      }
+      try {
+        const dir = savePersona(cwd, args.name, args.files, cfg.libraryDir)
+        return { created: args.name, dir, wrote: Object.keys(args.files ?? {}) }
+      } catch (e) {
+        return { error: e.message }
+      }
+    },
+  })
+
+  ctx.tools.register({
+    name: 'persona_use',
+    description:
+      'Equip an existing persona archive from .persona/<name>/ onto THIS session: its profile, memory tools and state tools ' +
+      'take effect on the next message, and the binding survives a restart. Call it only after the user agrees to equip. ' +
+      'It fails when the session is already equipped — the user must run /persona off first.',
+    parameters: {
+      type: 'object',
+      properties: { name: { type: 'string', description: 'Persona archive name under .persona/' } },
+      required: ['name'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: {},
+      render: (_a, v) => [{ type: 'text', text: typeof v === 'string' ? v : JSON.stringify(v, null, 2) }],
+    },
+    execute(args, exec) {
+      const agent = exec?.agent
+      if (!agent) return { error: 'persona_use requires an agent context' }
+      try {
+        const { dir, bindingNote } = equipSession(agent, args.name, cfg, resolveCwd)
+        return { equipped: args.name, dir, bindingNote }
+      } catch (e) {
+        return { error: e.message }
+      }
+    },
+  })
+
+  // ---------------------------------------------------- authoring skill
+  // The authoring workflow is the wizard's single source of truth. It shipped
+  // as an unregistered file for a while: packaged by `files`, but invisible to
+  // every agent's catalog, so nothing could ever load it. Registering it here
+  // puts `persona-authoring` in the skill registry's GLOBAL layer, which every
+  // agent's scope chain merges (`[global, ...chainLayers]`), so a preset agent
+  // sees it even though presets own their own local discovery.
+  //
+  // `ctx.inject` rather than a hard `inject` entry: a profile with no skill
+  // registry loses the wizard's discoverability, not the whole persona engine.
+  ctx.inject(['skills'], (skillCtx) => {
+    const skillRoot = join(BUNDLE_ROOT, 'skills', 'persona-authoring')
+    const { data, body } = splitFrontmatter(readFileSync(join(skillRoot, 'SKILL.md'), 'utf8'))
+    skillCtx.skills.register({
+      name: String(data.name ?? 'persona-authoring'),
+      description: String(data.description ?? ''),
+      ...(data.whenToUse === undefined ? {} : { whenToUse: String(data.whenToUse) }),
+      source: 'runtime',
+      provider: 'agent-personas',
+      content: body.trim(),
+      resourceBase: { kind: 'directory', path: skillRoot },
+    })
   })
 
   // --------------------------------------------------------------- commands

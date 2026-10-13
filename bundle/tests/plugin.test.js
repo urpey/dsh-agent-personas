@@ -12,12 +12,12 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import plugin from '../index.js'
-import { libraryRoot } from '../lib/persona.js'
+import { libraryRoot, listPersonas } from '../lib/persona.js'
 import { pendingOneShot, pendingContinuable } from '../lib/provider.js'
 
 /** A workspace holding one usable persona archive. */
@@ -41,16 +41,26 @@ function register(root, sessionId, name = 'deepseek') {
 /**
  * Mount the plugin on a recording ctx.
  * @param root - workspace root the plugin resolves an agent's cwd to.
- * @returns the `agent/created` listener and the tools the plugin registered.
+ * @returns the `agent/created` listener, the tools and skills it registered.
  */
 function mount(root) {
   const listeners = {}
   const providers = new Map()
   const tools = new Map()
+  const skills = new Map()
   const ctx = {
     on: (name, fn) => { (listeners[name] ??= []).push(fn); return () => {} },
     tools: { register: (def) => { tools.set(def.name, def); return () => {} } },
     commands: { register: () => () => {} },
+    // `ctx.inject` is how the plugin reaches an OPTIONAL service. The skill
+    // registry ships in every profile, but the persona engine must not fail to
+    // load without it — so the plugin asks, and this stub answers.
+    inject: (deps, callback) => {
+      if (deps.includes('skills')) {
+        callback({ skills: { register: (def) => { skills.set(def.name, def); return () => {} } } })
+      }
+      return () => {}
+    },
     subagents: {
       registerProvider: (provider) => { providers.set(provider.name, provider); return () => {} },
       getProvider: (name) => providers.get(name),
@@ -65,7 +75,7 @@ function mount(root) {
   plugin.apply(ctx, { libraryDir: '.persona' })
   const created = listeners['agent/created']?.[0]
   assert.equal(typeof created, 'function', 'the plugin watches agent/created')
-  return { created, tools, providers, ctx }
+  return { created, tools, providers, ctx, skills }
 }
 
 /** The binding row a session id was registered under, or undefined. */
@@ -242,4 +252,210 @@ test('the persona_spawn tool registers the child it creates, in both modes', asy
   const oneShot = await spawn.execute({ name: 'deepseek', prompt: 'hi', mode: 'one-shot' }, { agent: parent })
   assert.equal(bindingOf(root, oneShot.childId)?.name, 'deepseek', 'the one-shot child must be registered too')
   assert.equal(oneShot.bindingNote, '')
+})
+
+// ------------------------------------------------------------ authoring tools
+
+/** A draft that passes every `persona_save` check, for one archive name. */
+function draft(name) {
+  return {
+    'PERSONA.md': `---\nname: ${name}\ndescription: 一条线\ntriggers: []\nmbti: INTP\ninterests: []\nreactions: {}\n---\n\n## Layer 1 · Core Self\n\n- **identity**: 一条线\n`,
+    'STATE.md': `---\nbase:\n  energy: { max: 100, value: 80 }\npalam:\n  joy: { emit: favor, per: 100, decay: 20, value: 0 }\njuel:\n  favor: 0\nstats: {}\nmarks: {}\nrelations:\n  lead: { value: 0 }\nbuffs: []\n---\n\n## Notes\n`,
+    'memory/core/identity.md': `---\ntitle: identity\ndisclosure: always\n---\n\nI am ${name}.\n`,
+  }
+}
+
+test('persona_save creates the archive and fills an omitted skeleton from the template', async () => {
+  const root = workspace()
+  const { tools } = mount(root)
+  const save = tools.get('persona_save')
+  assert.equal(typeof save?.execute, 'function', 'the plugin registers persona_save')
+
+  // PERSONA.md and one memory node only: STATE.md and MEMORY.md are the host's
+  // job, so an author who omitted them still gets a loadable archive.
+  const files = draft('lifeline')
+  delete files['STATE.md']
+  const result = await save.execute({ name: 'lifeline', files }, { agent: agent(root, 'session-author') })
+
+  assert.equal(result.error, undefined)
+  assert.equal(result.created, 'lifeline')
+  const dir = join(root, '.persona', 'lifeline')
+  assert.ok(existsSync(join(dir, 'PERSONA.md')), 'the drafted profile lands verbatim')
+  assert.ok(existsSync(join(dir, 'STATE.md')), 'an omitted STATE.md is filled from the template')
+  assert.ok(existsSync(join(dir, 'MEMORY.md')), 'an omitted MEMORY.md is filled from the template')
+  assert.ok(existsSync(join(dir, 'memory', 'core', 'identity.md')), 'a nested memory node is created with its directories')
+  assert.match(readFileSync(join(dir, 'MEMORY.md'), 'utf8'), /# Memory Index — lifeline/, '{{name}} is substituted')
+  assert.match(readFileSync(join(dir, 'PERSONA.md'), 'utf8'), /一条线/, 'the draft is not replaced by the template')
+})
+
+test('persona_save refuses every malformed draft before writing anything', async () => {
+  const root = workspace()
+  const { tools } = mount(root)
+  const save = tools.get('persona_save')
+  const author = agent(root, 'session-author')
+  const profile = (name) => draft(name)['PERSONA.md']
+
+  const cases = [
+    ['an illegal name', { name: 'bad name!', files: draft('bad') }, 'a1'],
+    ['a path outside the archive', { name: 'a1', files: { 'PERSONA.md': profile('a1'), '../escape.md': 'x' } }, 'a1'],
+    ['an absolute path', { name: 'a2', files: { 'PERSONA.md': profile('a2'), '/etc/passwd': 'x' } }, 'a2'],
+    ['an unknown top-level file', { name: 'a3', files: { 'PERSONA.md': profile('a3'), 'SECRET.md': 'x' } }, 'a3'],
+    ['a memory node that is not markdown', { name: 'a4', files: { 'PERSONA.md': profile('a4'), 'memory/core/identity.txt': 'x' } }, 'a4'],
+    ['a draft with no PERSONA.md', { name: 'a5', files: { 'STATE.md': draft('a5')['STATE.md'] } }, 'a5'],
+    ['frontmatter outside the parser grammar', { name: 'a6', files: { 'PERSONA.md': '---\n{ a: 1 # note }\n---\n\nx\n' } }, 'a6'],
+    ['a profile with no frontmatter block', { name: 'a7', files: { 'PERSONA.md': '## Layer 1 · Core Self\n' } }, 'a7'],
+    ['a non-string file body', { name: 'a8', files: { 'PERSONA.md': profile('a8'), 'STATE.md': 42 } }, 'a8'],
+    ['files that are not an object', { name: 'a9', files: null }, 'a9'],
+  ]
+
+  for (const [label, args, name] of cases) {
+    const result = await save.execute(args, { agent: author })
+    assert.equal(typeof result.error, 'string', `${label}: must be refused`)
+    assert.equal(result.created, undefined, `${label}: must not report a creation`)
+    assert.equal(existsSync(join(root, '.persona', name)), false, `${label}: must not touch the disk`)
+  }
+})
+
+test('persona_save never overwrites an existing archive', async () => {
+  const root = workspace()
+  const { tools } = mount(root)
+  const before = readFileSync(join(root, '.persona', 'deepseek', 'PERSONA.md'), 'utf8')
+
+  const result = await tools.get('persona_save')
+    .execute({ name: 'deepseek', files: draft('deepseek') }, { agent: agent(root, 'session-author') })
+
+  assert.match(result.error, /already exists/)
+  assert.equal(
+    readFileSync(join(root, '.persona', 'deepseek', 'PERSONA.md'), 'utf8'), before,
+    'the existing archive must be byte-identical — creation only, never a rewrite',
+  )
+})
+
+test('persona_save refuses to rewrite the persona this session is running as', async () => {
+  const root = workspace()
+  const { tools, created } = mount(root)
+  const sessionId = 'session-running'
+  register(root, sessionId)
+  const running = agent(root, sessionId)
+  created({ agent: running })
+  assert.equal(running.personaEquip?.name, 'deepseek', 'the session is running as deepseek')
+
+  const result = await tools.get('persona_save')
+    .execute({ name: 'deepseek', files: draft('deepseek') }, { agent: running })
+
+  assert.match(result.error, /running as/)
+  assert.equal(result.created, undefined)
+})
+
+test('persona_save will not resurrect a live archive that was deleted under it', async () => {
+  const root = workspace()
+  const { tools, created } = mount(root)
+  const sessionId = 'session-running-deleted'
+  register(root, sessionId)
+  const running = agent(root, sessionId)
+  created({ agent: running })
+
+  // The existence check no longer catches this one — the directory is gone —
+  // so the "running as" guard is the only thing standing between a live session
+  // and its own archive being rebuilt from a draft.
+  rmSync(join(root, '.persona', 'deepseek'), { recursive: true })
+  const result = await tools.get('persona_save')
+    .execute({ name: 'deepseek', files: draft('deepseek') }, { agent: running })
+
+  assert.match(result.error, /running as/)
+  assert.equal(existsSync(join(root, '.persona', 'deepseek')), false, 'nothing may be written')
+})
+
+test('the persona_use tool equips and registers the session exactly like /persona use', () => {
+  const root = workspace()
+  const { tools } = mount(root)
+  const use = tools.get('persona_use')
+  assert.equal(typeof use?.execute, 'function', 'the plugin registers persona_use')
+
+  const sessionId = 'session-tool-equip'
+  const target = agent(root, sessionId)
+  const result = use.execute({ name: 'deepseek' }, { agent: target })
+
+  assert.equal(result.error, undefined)
+  assert.equal(result.equipped, 'deepseek')
+  assert.equal(target.personaEquip?.name, 'deepseek', 'the equip handle lives on the agent')
+  assert.equal(bindingOf(root, sessionId)?.name, 'deepseek', 'the ledger row is the durable half')
+  assert.equal(result.bindingNote, '', 'a healthy write reports nothing')
+
+  const again = use.execute({ name: 'deepseek' }, { agent: target })
+  assert.match(again.error, /already equipped as "deepseek" — \/persona off first/)
+})
+
+test('the persona_use tool refuses an archive that does not exist', () => {
+  const root = workspace()
+  const { tools } = mount(root)
+  const result = tools.get('persona_use').execute({ name: 'ghost' }, { agent: agent(root, 'session-x') })
+  assert.match(result.error, /not found/)
+})
+
+test('the authoring skill reaches the catalog as a runtime skill', () => {
+  const root = workspace()
+  const { skills } = mount(root)
+  const skill = skills.get('persona-authoring')
+  assert.equal(skill?.source, 'runtime')
+  assert.equal(skill?.provider, 'agent-personas')
+  assert.equal(typeof skill.description, 'string')
+  assert.ok(skill.description.length > 0, 'the registry rejects a skill with no description')
+  assert.ok(skill.content.length > 0, 'the body is what gets injected')
+  assert.equal(skill.content.startsWith('---'), false, 'frontmatter is stripped from the injected body')
+  assert.equal(skill.resourceBase?.kind, 'directory')
+  assert.ok(existsSync(join(skill.resourceBase.path, 'SKILL.md')), 'relative resources resolve against the skill directory')
+})
+
+test('the wizard chain closes: a saved draft becomes a live, equipped persona', async () => {
+  const root = workspace()
+  const { tools } = mount(root)
+  const author = agent(root, 'session-wizard')
+
+  // 1) The draft the agent authored lands as a real archive — through the
+  //    plugin's own tool surface, not by reaching into lib/ directly.
+  const saved = await tools.get('persona_save').execute({ name: 'lifeline', files: draft('lifeline') }, { agent: author })
+  assert.equal(saved.error, undefined)
+  assert.ok(listPersonas(root, '.persona').some(row => row.name === 'lifeline'), 'the new archive is in the library')
+
+  // 2) The user agrees to equip, and the SAME session — which was running as
+  //    nothing — picks the persona up without a restart.
+  const used = tools.get('persona_use').execute({ name: 'lifeline' }, { agent: author })
+  assert.equal(used.error, undefined)
+  assert.equal(equipped(author), true, 'the equipped agent carries the persona tool surface')
+  assert.equal(author.personaEquip?.name, 'lifeline')
+  assert.equal(bindingOf(root, 'session-wizard')?.name, 'lifeline', 'and the binding survives a restart')
+})
+
+test('the .persona write guard is untouched: file tools stay denied while persona_save works', async () => {
+  const root = workspace()
+  const { tools, created } = mount(root)
+  const sessionId = 'session-guard'
+  register(root, sessionId)
+  const running = agent(root, sessionId)
+  created({ agent: running })
+  assert.equal(running.personaEquip?.name, 'deepseek', 'the session is equipped, so the guard is installed')
+
+  const guard = running.ctx.handlers['tools/pre-execute']?.[0]
+  assert.equal(typeof guard, 'function', 'equip installs the .persona write guard')
+  const next = async () => ({ kind: 'allow' })
+
+  // The new tool must NOT have been bought by loosening the guard: a direct
+  // file write into the library is still refused in an equipped session. That
+  // denial is what makes persona_save the only way through, rather than one
+  // option among several.
+  const denied = await guard({ name: 'write', arguments: { path: '.persona/lifeline/PERSONA.md', content: 'x' } }, next)
+  assert.equal(denied.kind, 'deny', 'a direct write into .persona/ must still be refused')
+  assert.match(denied.reason, /persona tools/)
+
+  const edit = await guard({ name: 'edit', arguments: { path: '.persona/deepseek/PERSONA.md' } }, next)
+  assert.equal(edit.kind, 'deny', 'edit is a write tool too')
+
+  const unrelated = await guard({ name: 'write', arguments: { path: 'src/app.js', content: 'x' } }, next)
+  assert.equal(unrelated.kind, 'allow', 'the guard is scoped to the library, not to writing in general')
+
+  // ...and the sanctioned channel still works in that same equipped session.
+  const saved = await tools.get('persona_save').execute({ name: 'lifeline', files: draft('lifeline') }, { agent: running })
+  assert.equal(saved.error, undefined, 'persona_save is the tool-face channel that survives the guard')
+  assert.ok(existsSync(join(root, '.persona', 'lifeline', 'PERSONA.md')))
 })

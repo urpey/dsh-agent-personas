@@ -11,8 +11,11 @@
  * So this half contributes a SECOND, client-owned row: `personas`, whose entire
  * face (中文名 / 描述 / 图标) and whose bare-invocation picker live here, while the
  * host `/persona` command keeps its arguments, its lifecycle logging and its
- * scripted use. Every picker row runs the host command through the session's own
- * `command()` face, so there is exactly one implementation of each operation.
+ * scripted use. Every mutating picker row runs the host command through the
+ * session's own `command()` face, so there is exactly one implementation of each
+ * operation — except `new`, whose persona name is free text no popup can
+ * collect: it submits a kickoff message and lets the agent author the archive
+ * through the `persona-authoring` skill.
  */
 
 window.__ModuleLoader__.load({
@@ -55,12 +58,14 @@ window.__ModuleLoader__.load({
      * library and the bound persona directly, so a flow node would only repeat
      * what the panel already says. Every row here mutates real state, which
      * only the host command can do, so each one logs its own flow node.
-     * `new` is `gated`: its name is free text no popup shell can collect, so a
-     * pick only teaches the line to type instead of firing a doomed command.
+     * `new` is the exception: its persona name is free text no popup shell can
+     * collect, so instead of a doomed `/persona new` line the row carries a
+     * `kickoff` message key — a pick hands the fixed authoring flow to the
+     * agent in this very session (see `submitKickoff`).
      */
     const ACTION_ROWS = [
       { id: 'action:off', label: 'label.off', detail: 'detail.off', line: '/persona off' },
-      { id: 'action:new', label: 'label.new', detail: 'detail.new', line: '/persona new', gated: true },
+      { id: 'action:new', label: 'label.new', detail: 'detail.new', kickoff: 'prompt.new' },
     ]
 
     /** Dictionary namespace owned by this bundle's browser half. */
@@ -76,7 +81,7 @@ window.__ModuleLoader__.load({
       'label.off': '卸下当前人格',
       'label.spawnFor': '派生「{name}」',
       'label.compactFor': '压缩「{name}」的记忆',
-      'detail.new': '需要人格名，在输入框补全：/persona new <名> [描述]',
+      'detail.new': '由 agent 引导创建：提供要求或粘贴人设资料',
       'detail.off': '撤销本会话的装备与工具注册',
       'detail.spawnFor': '以该人格派生一个子智能体',
       'detail.compactFor': '整理该人格的记忆树',
@@ -85,15 +90,11 @@ window.__ModuleLoader__.load({
       'detail.statusNone': '本会话未装备人格 · 库内 {count} 个人格',
       'detail.noDescription': '（无描述）',
       'search.placeholder': '搜索人格…',
-      'search.empty': '本工作区还没有人格，先用 /persona new <名> 建一个',
+      'search.empty': '本工作区还没有人格——选「新建人格档案…」，由 agent 引导创建一个',
       'search.noResults': '没有匹配的人格',
       'error.notRetained': '本会话尚未保留，无法执行人格指令',
       'error.unknownCommand': '未识别的命令：{line}',
-      'gate.new.title': '新建人格需要名字',
-      'gate.new.description': '弹窗无法收集自由文本。请在输入框执行：/persona new <名> [描述]',
-      'gate.new.acknowledge': '我明白',
-      'gate.new.cancel': '取消',
-      'gate.new.confirm': '知道了',
+      'prompt.new': '新建人格。请加载 persona-authoring 技能，按其固定流程引导我：我没有资料就从访谈开始，我贴资料就直接生成草稿，经我确认后用 persona_save 落盘，最后询问是否装备。',
     }
 
     const en = {
@@ -106,7 +107,7 @@ window.__ModuleLoader__.load({
       'label.off': 'Unequip the current persona',
       'label.spawnFor': 'Spawn "{name}"',
       'label.compactFor': 'Compact "{name}" memory',
-      'detail.new': 'Needs a name — finish it in the composer: /persona new <name> [description]',
+      'detail.new': 'Agent-guided: describe what you want or paste persona material',
       'detail.off': 'Drop this session\'s equipping and tool registrations',
       'detail.spawnFor': 'Spawn a subagent running as that persona',
       'detail.compactFor': 'Tidy that persona\'s memory tree',
@@ -115,15 +116,11 @@ window.__ModuleLoader__.load({
       'detail.statusNone': 'nothing equipped · {count} in library',
       'detail.noDescription': '(no description)',
       'search.placeholder': 'Search personas…',
-      'search.empty': 'No personas in this workspace yet — create one with /persona new <name>',
+      'search.empty': 'No personas in this workspace yet — pick "Create a persona archive…" and the agent authors one with you',
       'search.noResults': 'No matching persona',
       'error.notRetained': 'This session is not retained; persona commands cannot run yet',
       'error.unknownCommand': 'Unrecognized command: {line}',
-      'gate.new.title': 'A new persona needs a name',
-      'gate.new.description': 'The popup cannot collect free text. Run this in the composer: /persona new <name> [description]',
-      'gate.new.acknowledge': 'I understand',
-      'gate.new.cancel': 'Cancel',
-      'gate.new.confirm': 'Got it',
+      'prompt.new': 'Create a persona. Load the persona-authoring skill and guide me through its fixed flow: start with the interview when I have no material, draft straight from what I paste when I do, save with persona_save once I confirm, and ask about equipping at the end.',
     }
 
     /** Identity translate: the plugin still loads when no locale service exists. */
@@ -187,6 +184,23 @@ window.__ModuleLoader__.load({
           }
 
           /**
+           * Hand the authoring flow to the agent as ONE normal queued user
+           * message: it appears in the transcript, waits its turn behind a busy
+           * session and can be cancelled like anything else the user sends. A
+           * popup shell can only offer canned choices, so a message is the only
+           * channel through which the row can hand over the free-text
+           * requirements it cannot collect — the agent loads the
+           * `persona-authoring` skill and runs its fixed interview → draft →
+           * `persona_save` → equip-ask sequence in this very session.
+           */
+          const submitKickoff = async (session, key) => {
+            const binding = sessions.binding(session.sessionId)
+            if (binding === undefined) throw new Error(t('error.notRetained'))
+            const result = await binding.session.prompt([{ type: 'text', text: t(key) }], 'queue')
+            if (!result.ok) throw result.error
+          }
+
+          /**
            * The personas of THIS session's workspace, in the host library's own
            * semantics: a direct child of `<libraryDir>/` that is a directory and
            * holds `PERSONA.md`. `.bindings/` therefore never qualifies. A missing
@@ -237,6 +251,11 @@ window.__ModuleLoader__.load({
               kind: 'popupSelect',
               searchLabels: () => ({
                 placeholder: t('search.placeholder'),
+                // `empty` is unreachable in this popup: the shell shows it only
+                // when the UNFILTERED option list is empty, and the action rows
+                // below are always present. It stays a required interface field,
+                // so keep it accurate — but never treat it as the empty-state UX.
+                // The 「新建人格档案…」 row IS the empty-state affordance.
                 empty: t('search.empty'),
                 noResults: t('search.noResults'),
               }),
@@ -289,20 +308,6 @@ window.__ModuleLoader__.load({
                     label: t(row.label),
                     detail: t(row.detail),
                     group: { name: 'actions', label: actions },
-                    // A gated row's argument is free text the shell cannot
-                    // collect, so it acknowledges the line to type instead of
-                    // submitting a command the host would only reject.
-                    ...(row.gated === true
-                      ? {
-                        confirmation: {
-                          title: t('gate.new.title'),
-                          description: t('gate.new.description'),
-                          acknowledgeLabel: t('gate.new.acknowledge'),
-                          cancelLabel: t('gate.new.cancel'),
-                          confirmLabel: t('gate.new.confirm'),
-                        },
-                      }
-                      : {}),
                   })),
                 ]
               },
@@ -330,9 +335,12 @@ window.__ModuleLoader__.load({
                 }
                 const row = ACTION_ROWS.find(candidate => candidate.id === option.id)
                 if (row === undefined) throw new Error(t('search.noResults'))
-                // The acknowledged gate already delivered its guidance; the
-                // line it names stays for the composer to complete.
-                if (row.gated === true) return
+                // The kickoff row hands the free-text flow to the agent rather
+                // than running a command whose argument nobody collected.
+                if (row.kickoff !== undefined) {
+                  await submitKickoff(session, row.kickoff)
+                  return
+                }
                 await runHostLine(session, row.line)
               },
             },

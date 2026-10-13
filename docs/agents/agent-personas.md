@@ -11,7 +11,7 @@ The `dsh-agent-personas` plugin bundle gives equipped agents a persistent person
   .routes/              # gate verdict log (runtime, gitignored)
     <sessionId>.jsonl   # one line per verdict: { at, turn, step, verdict, reason, signals }
   <name>/
-    PERSONA.md        # identity + voice (agent-read-only; only humans edit)
+    PERSONA.md        # identity + voice (created once by persona_save; humans edit after)
     STATE.md          # layered numeric state (tools only; see below)
     MEMORY.md         # boot URI list + memory index (tools only)
     memory/           # URI-addressed tree; one .md per node
@@ -19,7 +19,7 @@ The `dsh-agent-personas` plugin bundle gives equipped agents a persistent person
       relationships/lead.md    ↔ memory://relationships/lead
 ```
 
-## PERSONA.md (three layers, human-edited)
+## PERSONA.md (three layers, human-owned)
 
 ```markdown
 ---
@@ -157,15 +157,30 @@ reactions:
 
 | Data | Who writes | How |
 |---|---|---|
-| PERSONA.md | humans only | hand edit; agents cannot modify it |
+| PERSONA.md — **new** archive | `persona_save` (agent, after the human confirms the draft) | created once at authoring time; the human's confirmation in conversation is what delegates the keystroke |
+| PERSONA.md — **existing** archive | humans only | hand edit; no tool rewrites a live profile — `persona_save` refuses an existing name, and the currently equipped archive outright |
+| STATE.md / MEMORY.md / `memory/**.md` — **new** archive | `persona_save` | same one-shot call: validated whole-archive before anything is written; an omitted STATE.md/MEMORY.md is filled from `bundle/templates/` |
 | STATE.md `base`/`palam`/`relations` values | `state_delta` tool, or the `delta` field of the `persona_gate` call | integer deltas, clamped; optional `event` calibrates against the reaction profile |
 | STATE.md `base.*.tick` | humans only | schema key; per-turn drift applied by the turn hook, never by tools |
 | STATE.md `buffs` | `buff_apply` / `buff_clear` tools | same-name buff refreshes; `duration` decrements per turn |
 | STATE.md `stats`/`marks`/`juel`/field schema | `state_settle` only | palam → juel → level-ups; no direct tool write |
 | STATE.md body notes | `state_update` tool | append-only |
-| PERSONA.md `reactions` | humans only | same human-only file as `mbti`; MBTI letters seed the defaults |
+| PERSONA.md `reactions` | `persona_save` at authoring time, humans after | declared in the same human-owned file as `mbti`; MBTI letters seed the defaults |
 | memory/**.md | `memory_*` tools | URI tree + frontmatter |
-| direct file tools on `.persona/**` | **denied** | scoped `tools/pre-execute` guard rejects `write`/`edit`/`bash` calls whose path touches the persona library |
+| direct file tools on `.persona/**` | **denied** | scoped `tools/pre-execute` guard rejects `write`/`edit`/`multi_edit`/`bash` calls whose arguments touch the persona library (equipped sessions only — see Known limitations) |
+
+## Authoring a new archive (`persona_save` / `persona_use`)
+
+Two model-facing tools carry the creation path, both registered by `bundle/index.js`:
+
+| Tool | Params | Contract |
+|---|---|---|
+| `persona_save` | `{ name, files }` | The only channel an agent has for placing a profile on disk. `files` maps archive-relative paths to full file text; keys are exactly `PERSONA.md`, `STATE.md`, `MEMORY.md` and `memory/<rel>.md` — no `..`, absolute paths, dot segments or non-`.md` files. `PERSONA.md` is required, and it and `STATE.md` must open with a `---` frontmatter block. Validation covers the whole archive before any write: the name matches `^[\w-]+$`, the archive does not already exist (**never overwritten**), every path is whitelisted, PERSONA.md and STATE.md frontmatter parse under `lib/frontmatter.js`, and the target is not the session's currently equipped persona. Only then does it `mkdir` and write each file, so a rejected call leaves nothing half-written. Omitted `STATE.md`/`MEMORY.md` are filled from `templates/` with `{{name}}`/`{{description}}` substituted (the description read from the draft's own frontmatter) — skeleton completeness is the host's job, not the model's. |
+| `persona_use` | `{ name }` | Equips the persona in the current session through the same `equipSession` implementation `/persona use` calls, so the equip and its `.persona/.bindings/<sessionId>.json` row are one act. Refuses when a persona is already equipped. |
+
+`persona_save` is a tool face, not a file tool: the `tools/pre-execute` guard above never sees it, which is exactly what makes authoring possible from an equipped session. What it cannot do is edit — it creates only, and the currently equipped archive is out of reach, so a running persona can never rewrite itself. "PERSONA.md is human-written" survives as *human-confirmed*: the human reads the draft in conversation and delegates the keystroke; the file itself is still never touched by a file tool.
+
+The flow the model follows is fixed by the `persona-authoring` skill (`bundle/skills/persona-authoring/SKILL.md`), registered at startup through `ctx.skills.register()` as a **runtime** skill — `source: 'runtime'`, `provider: 'agent-personas'`, in the global scope layer, so every agent in the profile can see and load it, equipped or not. That registration is the fix for the file having shipped inside `files` but been declared by no provider: packaged, and unreadable. The skill is the single authority for the create flow (collect → draft → confirm → `persona_save` → ask about equipping) and states the write-channel rules as hard instructions, including the name-legalization rule and the ban on reaching for file tools.
 
 ## Settle algorithm (`state_settle` / turn-end when configured)
 
@@ -291,7 +306,7 @@ Config (`cordis.patch.yml` row `agent-personas`, user patch can override):
 | `providerName` | `persona` | `ctx.subagents` provider name |
 | `criticalGate` | `auto` | `auto` (the model rules each turn via `persona_gate`) / `always` (every turn critical) / `never` (every turn routine) |
 
-Binding persistence (resume after restart): `.persona/.bindings/<sessionId>.json` is the **single durable owner** of "which persona is this session equipped with". Two writers, one row each: `/persona use` registers the session it equipped, and every spawn path (`/persona spawn`, the `persona_spawn` tool in both modes) registers the child session it created — the child is equipped by construction, so it must be registered too. `/persona compact` is deliberately **not** a writer: it creates no child session at all (see "Memory compaction is one in-process call" below). On the next `agent/created` the plugin reads the row back and re-equips as `mode: 'session'`, and the `/personas` picker reads the same row to badge the equipped persona. **Do not reintroduce a `persona/bound` session event** — live `Session.append` cannot mark an event `ignorable: true`, so an out-of-tree event type persists as a required unknown and `validateStoredEvents` refuses to restore the whole session (session becomes unopenable). **Do not add a second binding channel either**: continuable spawns pass persona BODY text (`lib/provider.js` `personaBodyText`), so a `subagent/descriptor` carries no `persona-profile:` marker to parse — the descriptor-replay branch that used to read one was unreachable dead code and was removed.
+Binding persistence (resume after restart): `.persona/.bindings/<sessionId>.json` is the **single durable owner** of "which persona is this session equipped with". Two writers, one row each: the equip path — `/persona use` and the `persona_use` tool, one shared `equipSession` implementation — registers the session it equipped, and every spawn path (`/persona spawn`, the `persona_spawn` tool in both modes) registers the child session it created — the child is equipped by construction, so it must be registered too. `/persona compact` is deliberately **not** a writer: it creates no child session at all (see "Memory compaction is one in-process call" below). On the next `agent/created` the plugin reads the row back and re-equips as `mode: 'session'`, and the `/personas` picker reads the same row to badge the equipped persona. **Do not reintroduce a `persona/bound` session event** — live `Session.append` cannot mark an event `ignorable: true`, so an out-of-tree event type persists as a required unknown and `validateStoredEvents` refuses to restore the whole session (session becomes unopenable). **Do not add a second binding channel either**: continuable spawns pass persona BODY text (`lib/provider.js` `personaBodyText`), so a `subagent/descriptor` carries no `persona-profile:` marker to parse — the descriptor-replay branch that used to read one was unreachable dead code and was removed.
 
 Route log (gate audit): every verdict appends one JSON line to `.persona/.routes/<sessionId>.jsonl` — `{ at, turn, step, verdict, reason, signals }`, plus `delta` (the applied `changed` list) when the verdict carried a ledger entry. `at` is ISO-8601 and `verdict` is `critical | routine | missed | no-delta` (`missed` = the turn ended with no verdict; `no-delta` = the turn was ruled but wrote no ledger entry, neither a gate `delta` nor a `state_delta` call). `signals` is the rendered signal block the model ruled against, so a ruling can be reviewed after the fact. The `no-delta` verdict exists because "state is not updated every turn" used to be invisible: it is a count in the log now, and it never interrupts the turn. Appends are best-effort: an unwritable log never breaks a turn. **Do not turn it into a session event** — the same `ignorable` hazard as `.persona/.bindings/` above applies verbatim.
 
@@ -315,7 +330,7 @@ Route log (gate audit): every verdict appends one JSON line to `.persona/.routes
   first writer after a hand edit. The per-turn tick (`tickBuffs`/`tickBase`) can write
   first and drop comments silently — comments are documentation, not data, and the
   structure (schema keys, values) survives either way.
-- `.persona` write guard is a substring check on tool arguments, not a syscall-level jail.
+- `.persona` write guard is a substring check on tool arguments, not a syscall-level jail — and it is registered on the *equipped* agent's scoped context, so it exists only while a persona is equipped. Outside an equipped session nothing physically stops a file tool from writing `.persona/**`; `persona_save` is mandatory because the skill's fixed flow says so and because it is the only channel that validates the whole archive, refuses to overwrite, and completes the skeleton.
 - `spawn_teammate` does not forward a `persona` request field — persona-bound teammates must come from `persona_spawn` or `/persona spawn`.
 - Memory compaction is on-demand (`/persona compact <name>` maintenance call + closing-time tidying), not scheduled — no automatic cadence yet.
 

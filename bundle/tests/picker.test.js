@@ -41,7 +41,9 @@ function loadClient() {
  * Mount the client half on a fake client ctx whose `workspaceFiles` remote is
  * backed by a real directory tree, so path semantics match the Host's.
  * @param root - workspace root the relative paths resolve against.
- * @param options - `failList` makes every listing answer a carrier failure.
+ * @param options - `failList` makes every listing answer a carrier failure;
+ *   `noBinding` leaves the session unretained; `failPrompt` makes the kickoff
+ *   prompt answer a business error.
  */
 function mount(root, options = {}) {
   const calls = []
@@ -87,6 +89,7 @@ function mount(root, options = {}) {
   }
 
   const executed = []
+  const submitted = []
   const contributions = []
   const commandUi = {
     register: (contribution) => { contributions.push(contribution); return () => {} },
@@ -95,11 +98,18 @@ function mount(root, options = {}) {
     popupFor: () => undefined,
   }
   const sessions = {
-    binding: () => ({
+    binding: () => (options.noBinding === true ? undefined : ({
       session: {
         command: async (line) => { executed.push(line); return { ok: true, value: { matched: true } } },
+        // The kickoff path goes through the session's prompt face, not its
+        // command face: record both so a test can prove which one ran.
+        prompt: async (content, mode) => {
+          submitted.push({ content, mode })
+          if (options.failPrompt === true) return { ok: false, error: new Error('session is busy') }
+          return { ok: true, value: { accepted: true } }
+        },
       },
-    }),
+    })),
   }
   // The real client ctx exposes the workspace-files namespace under the FLAT
   // service key `remote.workspaceFiles`; there is no nested `remote` service to
@@ -128,7 +138,7 @@ function mount(root, options = {}) {
     injects.includes('remote.workspaceFiles'),
     'the contribution must inject the flat remote.workspaceFiles service key',
   )
-  return { contribution: contributions[0], executed, calls, dictionaries }
+  return { contribution: contributions[0], executed, submitted, calls, dictionaries }
 }
 
 /** Build a workspace whose `.persona/` holds the given archives. */
@@ -305,21 +315,72 @@ test('list and status are panel views, never flow-node commands', async () => {
   assert.deepEqual(mounted.executed, [])
 })
 
-test('the create row gates on the name it cannot collect, and submits nothing', async () => {
+test('the create row hands the free-text flow to the agent instead of gating it', async () => {
   const mounted = mount(workspace({ alice: 'name: alice\ndescription: first' }))
   const rows = await rowsOf(mounted)
 
   const create = rows.find(row => row.id === 'action:new')
-  assert.equal(create.confirmation.title, '新建人格需要名字')
-  assert.match(create.confirmation.description, /\/persona new <名> \[描述\]/)
+  // A popup shell cannot collect a persona name, but the row no longer blocks
+  // on that: there is no confirmation gate to acknowledge at all.
+  assert.equal('confirmation' in create, false)
+  assert.equal(create.detail, '由 agent 引导创建：提供要求或粘贴人设资料')
 
-  // Acknowledging the gate teaches the line; it never fires a doomed command.
+  // Picking it submits ONE queued kickoff message naming the authoring skill —
+  // never a host command line for a name nobody collected.
   await mounted.contribution.ui.onSelect(create, { sessionId: 'session-a' })
   assert.deepEqual(mounted.executed, [])
+  assert.equal(mounted.submitted.length, 1)
+  assert.equal(mounted.submitted[0].mode, 'queue')
+  assert.deepEqual(mounted.submitted[0].content.map(part => part.type), ['text'])
+  const kickoff = mounted.submitted[0].content[0].text
+  assert.equal(kickoff, mounted.dictionaries.get('persona').zh['prompt.new'])
+  assert.match(kickoff, /persona-authoring/)
+  assert.match(kickoff, /persona_save/)
 
   // The rows whose arguments are already known still execute for real.
   await mounted.contribution.ui.onSelect(rows.find(row => row.id === 'action:off'), { sessionId: 'session-a' })
   assert.deepEqual(mounted.executed, ['/persona off'])
+})
+
+test('a kickoff that cannot be submitted surfaces the failure instead of swallowing it', async () => {
+  // An unretained session has no face to prompt: the row reports that, and
+  // submits nothing anywhere.
+  const unretained = mount(workspace({}), { noBinding: true })
+  const rows = await rowsOf(unretained)
+  const create = rows.find(row => row.id === 'action:new')
+  await assert.rejects(
+    () => unretained.contribution.ui.onSelect(create, { sessionId: 'session-a' }),
+    /本会话尚未保留/,
+  )
+  assert.deepEqual(unretained.executed, [])
+  assert.deepEqual(unretained.submitted, [])
+
+  // A rejected prompt propagates the carrier's own error to the picker.
+  const rejected = mount(workspace({}), { failPrompt: true })
+  await assert.rejects(
+    () => rejected.contribution.ui.onSelect(create, { sessionId: 'session-a' }),
+    /session is busy/,
+  )
+  assert.equal(rejected.submitted.length, 1)
+  assert.deepEqual(rejected.executed, [])
+})
+
+test('the picker copy no longer sends the user to the /persona new command line', async () => {
+  const mounted = mount(workspace({}))
+  const labels = mounted.contribution.ui.searchLabels()
+  // Assert the PROPERTY, not a copy of the string. Hard-coding the value here
+  // would only restate the dictionary — it could never fail for a behavioural
+  // reason, and it breaks on every legitimate copy edit.
+  assert.equal(labels.empty.includes('/persona new'), false)
+  assert.equal(labels.noResults.includes('/persona new'), false)
+
+  const create = (await rowsOf(mounted)).find(row => row.id === 'action:new')
+  assert.equal(create.detail.includes('/persona new'), false)
+  // The gate copy is gone from the dictionary, not merely unreferenced.
+  const dicts = mounted.dictionaries.get('persona')
+  for (const key of [...Object.keys(dicts.zh), ...Object.keys(dicts.en)]) {
+    assert.equal(key.startsWith('gate.new.'), false, `stale dictionary key: ${key}`)
+  }
 })
 
 test('the contribution carries the localized face and both dictionaries', async () => {

@@ -7,7 +7,8 @@ import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { splitFrontmatter } from './frontmatter.js'
 
-const BUNDLE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+/** Absolute root of this bundle — the base every packaged asset resolves against. */
+export const BUNDLE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const TEMPLATES = join(BUNDLE_ROOT, 'templates')
 const PROMPTS = join(BUNDLE_ROOT, 'prompts')
 
@@ -72,14 +73,124 @@ export function ensurePersona(cwd, name, libraryDir = '.persona') {
   return dir
 }
 
+/** The one owner of "what a persona name may be": the directory name, the
+ *  `/persona use <name>` argument and the picker row all read this rule. */
+function assertPersonaName(name) {
+  if (typeof name !== 'string' || !/^[\w-]+$/.test(name)) {
+    throw new Error(`invalid persona name "${name}": use letters, digits, _ or -`)
+  }
+}
+
 /** Create a persona archive from templates; fails if it already exists. */
 export function createPersona(cwd, name, description = '', libraryDir = '.persona') {
-  if (!/^[\w-]+$/.test(name)) throw new Error(`invalid persona name "${name}": use letters, digits, _ or -`)
+  assertPersonaName(name)
   if (personaExists(cwd, name, libraryDir)) throw new Error(`persona "${name}" already exists`)
   const dir = ensurePersona(cwd, name, libraryDir)
   writeFileSync(join(dir, 'PERSONA.md'),
     readFileSync(join(TEMPLATES, 'PERSONA.md'), 'utf8')
       .replaceAll('{{name}}', name).replaceAll('{{description}}', description), 'utf8')
+  return dir
+}
+
+/** Archive files `persona_save` may write at the top level of a new archive. */
+const ARCHIVE_FILES = new Set(['PERSONA.md', 'STATE.md', 'MEMORY.md'])
+
+/**
+ * Accept one `files` key as a path inside the archive, or reject it.
+ *
+ * `persona_save` creates a skeleton — it is not a general door into `.persona/`.
+ * Absolute paths, drive letters, backslashes and `.`/`..` segments are refused
+ * before any `join`, so a crafted key cannot address anything outside the
+ * archive directory it is creating.
+ * @param key - one `files` key from the model.
+ * @returns the accepted archive-relative path, or undefined.
+ */
+function archivePath(key) {
+  if (typeof key !== 'string' || key === '') return undefined
+  if (key.startsWith('/') || key.startsWith('\\') || /^[A-Za-z]:/.test(key)) return undefined
+  if (key.includes('\\')) return undefined
+  if (key.split('/').some(segment => segment === '' || segment === '.' || segment === '..')) return undefined
+  if (ARCHIVE_FILES.has(key)) return key
+  if (!key.startsWith('memory/')) return undefined
+  return key.endsWith('.md') ? key : undefined
+}
+
+/** The `description:` scalar of a PERSONA.md draft, for template substitution. */
+function draftDescription(text) {
+  try { return String(splitFrontmatter(text).data.description ?? '') } catch { return '' }
+}
+
+/**
+ * Create a persona archive from an authored draft: validate everything, then write.
+ *
+ * This is the ONE channel an agent may use to write `.persona/**` — the file
+ * tools are denied there by the equip guard (`lib/equip.js`), so an authoring
+ * flow that could not reach this function could not land a persona at all.
+ * Creation only: an existing archive is never overwritten, so the persona a
+ * session is currently running as cannot be rewritten from under itself.
+ *
+ * Every check runs before the first `mkdir`, because a half-created archive is
+ * worse than a refused one: `listPersonas` would show it, and the author could
+ * not tell a partial write from a deliberate one.
+ *
+ * @param cwd - workspace root.
+ * @param name - archive name, `^[\w-]+$`.
+ * @param files - archive-relative path → file text.
+ * @param libraryDir - library root, relative to cwd.
+ * @returns the created persona directory.
+ */
+export function savePersona(cwd, name, files, libraryDir = '.persona') {
+  assertPersonaName(name)
+  if (personaExists(cwd, name, libraryDir)) {
+    throw new Error(`persona "${name}" already exists — persona_save only creates new archives, it never overwrites`)
+  }
+  if (files === null || typeof files !== 'object' || Array.isArray(files)) {
+    throw new Error('persona_save requires files: an object mapping archive path to file text')
+  }
+
+  const drafts = new Map()
+  for (const [key, text] of Object.entries(files)) {
+    const path = archivePath(key)
+    if (path === undefined) {
+      throw new Error(`invalid file path "${key}": use PERSONA.md, STATE.md, MEMORY.md or memory/<name>.md`)
+    }
+    if (typeof text !== 'string') throw new Error(`file "${key}" must be a string`)
+    drafts.set(path, text)
+  }
+  if (!drafts.has('PERSONA.md')) {
+    throw new Error('persona_save requires PERSONA.md — it is the file that makes a directory a persona archive')
+  }
+  // The structured files carry frontmatter this project parses with a
+  // deliberately minimal grammar (`lib/frontmatter.js`). A draft outside that
+  // grammar has to fail here, while nothing is written, instead of at the first
+  // state or memory write later — by then the archive already looks real.
+  for (const file of ['PERSONA.md', 'STATE.md']) {
+    const text = drafts.get(file)
+    if (text === undefined) continue
+    if (!/^---\r?\n/.test(text)) throw new Error(`${file} must open with a --- frontmatter block`)
+    try {
+      splitFrontmatter(text)
+    } catch (e) {
+      throw new Error(`${file} frontmatter is not parseable: ${e.message}`)
+    }
+  }
+
+  const dir = personaDir(cwd, name, libraryDir)
+  mkdirSync(join(dir, 'memory'), { recursive: true })
+  // Skeleton completeness is the host's job, not the author's: a draft that
+  // omitted STATE.md or MEMORY.md still yields a loadable archive.
+  const description = draftDescription(drafts.get('PERSONA.md'))
+  for (const file of ARCHIVE_FILES) {
+    const text = drafts.get(file) ?? readFileSync(join(TEMPLATES, file), 'utf8')
+      .replaceAll('{{name}}', name).replaceAll('{{description}}', description)
+    writeFileSync(join(dir, file), text, 'utf8')
+  }
+  for (const [path, text] of drafts) {
+    if (ARCHIVE_FILES.has(path)) continue
+    const target = join(dir, path)
+    mkdirSync(dirname(target), { recursive: true })
+    writeFileSync(target, text, 'utf8')
+  }
   return dir
 }
 

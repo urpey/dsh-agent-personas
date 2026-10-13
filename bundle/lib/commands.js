@@ -23,10 +23,41 @@ const NEVER_ABORTS = new AbortController().signal
 /** Durable session id for the binding ledger (header id, matching resume-time lookups). */
 const sessionIdOf = (agent) => agent?.session?.header?.id ?? agent?.session?.id
 
+/**
+ * Equip a persona archive onto a live session: validate, register the persona
+ * surface on the agent, and record the durable binding.
+ *
+ * Shared by `/persona use` and the model-facing `persona_use` tool, so the two
+ * entry points cannot drift: the already-equipped guard, the equip handle on
+ * the agent, and the ledger row are one implementation. The equip handle lives
+ * ON the agent (never a module-level table) — see `docs/agents/agent-personas.md`
+ * for why a process-scoped map lied after every reload.
+ *
+ * @param agent - the live agent the equip belongs to.
+ * @param name - persona archive name.
+ * @param cfg - plugin config.
+ * @param resolveCwd - workspace resolver for the agent.
+ * @returns the persona directory and the ledger note (`''` when healthy).
+ * @throws when the archive is missing or the session is already equipped.
+ */
+export function equipSession(agent, name, cfg, resolveCwd) {
+  const cwd = resolveCwd(agent)
+  if (!personaExists(cwd, name, cfg.libraryDir)) throw new Error(`persona "${name}" not found in ${cfg.libraryDir}/`)
+  if (agent.personaEquip) throw new Error(`already equipped as "${agent.personaEquip.name}" — /persona off first`)
+  const dir = ensurePersona(cwd, name, cfg.libraryDir)
+  const dispose = equipAgent(agent.ctx, agent, dir, name, cfg, 'session')
+  // The equip lives on the agent itself — it IS this session's state.
+  agent.personaEquip = { name, dispose }
+  // Persist the binding so a resumed session re-equips itself and the picker
+  // can badge it (session events can't carry this — see lib/bindings.js header).
+  const bindingNote = persistBinding(libraryRoot(cwd, cfg.libraryDir), sessionIdOf(agent), name)
+  return { dir, bindingNote }
+}
+
 export function registerCommands(ctx, cfg, resolveCwd) {
   ctx.commands.register({
     name: 'persona',
-    description: 'Manage persistent personas: /persona list|new|use|off|spawn|compact|status',
+    description: 'Manage persistent personas: /persona list|new|use|off|spawn|compact|status — author a new one with the /personas picker (agent-guided)',
     input: { hint: '<list|new|use|off|spawn|compact|status> [args]' },
     handler: async ({ agent, rawInput }) => {
       const [sub = '', ...rest] = rawInput.trim().split(/\s+/).filter(Boolean)
@@ -42,23 +73,16 @@ export function registerCommands(ctx, cfg, resolveCwd) {
           if (!name) return err('usage: /persona new <name> [description]')
           try {
             const dir = createPersona(cwd, name, desc.join(' '), cfg.libraryDir)
-            return ok(`Created ${dir}\nEdit PERSONA.md (identity+voice) and STATE.md (fields), then /persona use ${name} or /persona spawn ${name}.`)
+            return ok(`Created ${dir} (empty skeleton)\nAuthor it with the /personas picker — the agent guides you through it — or edit PERSONA.md (identity+voice) and STATE.md (fields) by hand, then /persona use ${name} or /persona spawn ${name}.`)
           } catch (e) { return err(e.message) }
         }
         case 'use': {
           const [name] = rest
           if (!name) return err('usage: /persona use <name>')
-          if (!personaExists(cwd, name, cfg.libraryDir)) return err(`persona "${name}" not found in ${cfg.libraryDir}/`)
-          if (agent.personaEquip) return err(`already equipped as "${agent.personaEquip.name}" — /persona off first`)
-          const dir = ensurePersona(cwd, name, cfg.libraryDir)
-          const dispose = equipAgent(agent.ctx, agent, dir, name, cfg, 'session')
-          // The equip lives on the agent itself — it IS this session's state.
-          agent.personaEquip = { name, dispose }
-          // Persist the binding so a resumed session re-equips itself and the
-          // picker can badge it (session events can't carry this — see
-          // lib/bindings.js header).
-          const bindingNote = persistBinding(libraryRoot(cwd, cfg.libraryDir), sessionIdOf(agent), name)
-          return ok(`Persona "${name}" equipped — takes effect on your next message. ${personaDir(cwd, name, cfg.libraryDir)}${bindingNote}`)
+          try {
+            const { dir, bindingNote } = equipSession(agent, name, cfg, resolveCwd)
+            return ok(`Persona "${name}" equipped — takes effect on your next message. ${dir}${bindingNote}`)
+          } catch (e) { return err(e.message) }
         }
         case 'off': {
           const cur = agent.personaEquip
