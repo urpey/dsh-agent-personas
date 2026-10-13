@@ -2,61 +2,61 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md)
 
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的外掛套件，讓 agent 擁有持久人格——三層人格檔案（`PERSONA.md`）、分層整數狀態系統（`STATE.md`）、`memory://` URI 記憶樹（`memory/`）——全部以本地 markdown 存放在工作階段工作區的 `.persona/<name>/` 下。
+專為 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 設計的外掛套件，為 Agent 賦予跨工作階段存續的立體人格。系統包含三層人格設定（`PERSONA.md`）、分層整數狀態機制（`STATE.md`）以及基於 `memory://` 協定的 URI 記憶樹（`memory/`），全部以純 Markdown 檔案形式儲存在工作區目錄 `.persona/<name>/` 下。
 
-它**覆蓋了原生 persona**：自帶的 `personaPrefix`/`@deepseek-ai/dsh-persona` 只能注入一段固定的散文，而這裡的人格是活的檔案——身分照常進入系統提示詞，還多出隨回合漂移沉澱的狀態、能回憶能生長能壓縮的記憶，並跨工作階段存續。
+它**完全涵蓋並超越了原生 persona 的能力**：原版的 `personaPrefix` / `@deepseek-ai/dsh-persona` 僅能向提示詞注入一段靜態設定，而本外掛將人格沉澱為工作區中真實流轉的檔案。角色的底層基調穩定貫穿於系統提示詞中，心緒與數值隨著每輪對話悄然漂移、沉澱，記憶亦能在互動中被喚醒、生長與提煉，即便工作階段中斷重啟，角色依然如初。
 
 ## 特性
 
-- **活的檔案，普通檔案** — 三層身分、分層整數狀態系統、URI 記憶樹，全是 `.persona/<name>/` 下可直接讀寫的 markdown。
-- **覆蓋原生 persona** — `personaPrefix` 能做的（把身分散文注入系統提示詞）都做，還多出它無法表達的逐回合演繹、狀態與記憶。
-- **裝備一次** — 本地化的 `/personas` 選擇器負責裝備、卸下、以人格身分派生子 agent；恢復的工作階段自動重新裝備。
-- **開箱即玩** — 內建 `deepseek` 範例一鍵建立；`persona-authoring` 技能訪談你並寫出自己的檔案。
+- **設定即檔案，清晰可見** — 三層人格架構、分層整數狀態體系與 URI 記憶樹，皆是 `.persona/<name>/` 目錄下清晰易讀、隨時可手動調整的 Markdown 文件。
+- **超越靜態提示詞** — 既保留了 `personaPrefix` 注入核心設定的能力，又補足了它無法實現的動態心境起伏、人際關係演變與長期記憶檢索。
+- **一次裝配，無縫延續** — 透過本地化的 `/personas` 互動面板，即可完成人格的裝配、卸下或派生子 Agent；歷史工作階段恢復時自動重新裝配，無需重複配置。
+- **隨取隨用與輔助引導** — 內建開箱可用的 `deepseek` 人格範例；亦可透過 `persona-authoring` 技能展開對話訪談，量身訂做專屬的人格檔案。
 
 ## 安裝
 
-需要 DeepSeek Harness ≥ `0.2.1-alpha.1` 與 pnpm 10+；`/personas` 選擇器需要 **web** profile。
+執行環境需滿足 DeepSeek Harness ≥ `0.2.1-alpha.1` 與 pnpm 10+；視覺化面板 `/personas` 依賴 **web** profile。
 
 ```sh
 dsh plugin --profile web add 'github:urpey/dsh-agent-personas#path:/bundle'
-# 要可重現，釘一個 commit：…#<sha>&path:/bundle
+# 如需鎖定版本以確保可重現性，可在末尾加入 commit hash：…#<sha>&path:/bundle
 ```
 
 ## 快速開始
 
 ```text
-/personas                 # 打開選擇器
-  → 从范例创建「deepseek」 # 把內建範例複製為 .persona/deepseek/
-  → deepseek              # 裝備——下一回合開始入戲
-  → 卸下当前人格           # 卸下
+/personas                 # 開啟互動選擇器
+  → 從範例建立「deepseek」 # 將內建範例複製到 .persona/deepseek/
+  → deepseek              # 裝配人格——下一輪對話起生效
+  → 卸下目前人格           # 卸下目前裝配的人格
 ```
 
-想自創人格：選擇 **新建人格档案…**——`persona-authoring` 技能會訪談你、起草檔案並詢問是否裝備。
+如需自行建立新角色，在面板中選擇 **新建人格檔案…** 即可——`persona-authoring` 技能將透過互動訪談協助你梳理設定、產生檔案草稿並完成儲存裝配。
 
-`/persona` host 指令（`list|new|examples|use|off|spawn|compact|status`，驅動與選擇器相同的操作）**預設不註冊**，設 `slashCommand: true` 可恢復。預設值見 [bundle/cordis.patch.yml](bundle/cordis.patch.yml)——profile patch 是整列替換 `config`，要重述你保留的鍵。
+`/persona` 命令列指令（支援 `list|new|examples|use|off|spawn|compact|status`，底層與圖形面板完全一致）**預設未註冊**；如需在終端機選單中使用，請在設定中宣告 `slashCommand: true`。預設設定見 [bundle/cordis.patch.yml](bundle/cordis.patch.yml)。請注意，profile patch 採取全量覆蓋 `config` 的策略，覆寫時請一併保留所需的預設鍵值。
 
-## 人格檔案格式
+## 人格檔案結構
 
-人格就是一個純 markdown 目錄：
+每個人格歸檔都是一個規範的 Markdown 目錄：
 
 ```text
 .persona/<name>/
-├── PERSONA.md     # frontmatter + Layer 1 Core Self / Layer 2 Voice / Layer 3 World
-├── STATE.md       # 數值層：base、jewel、param、stats、marks、relations、buffs
-├── MEMORY.md      # boot URI + 派生索引
-└── memory/        # 每個 memory:// 節點一個 .md 檔案
+├── PERSONA.md     # 中繼資料 + 第一層核心本質 / 第二層語氣表達 / 第三層認知世界觀
+├── STATE.md       # 數值狀態層：base、jewel、param、stats、marks、relations、buffs
+├── MEMORY.md      # 引導記憶 URI + 衍生索引
+└── memory/        # 每個 memory:// 節點對應的獨立 .md 檔案
 ```
 
-完整契約——數值模型、settle 代數、每回合機制——見 [docs/persona-format.md](docs/persona-format.md)。
+關於數值狀態模型、結算代數規則及單輪對話流轉機制的完整規範，請參閱 [docs/persona-format.md](docs/persona-format.md)。
 
-## 開發
+## 本地開發
 
 ```sh
 cd bundle
-node --test tests/*.test.js   # 160+ 個測試，node 內建 runner，零相依
+node --test tests/*.test.js   # 包含 160+ 項測試，使用 Node 內建測試執行器，零額外相依
 ```
 
-貢獻慣例見 [CONTRIBUTING.md](CONTRIBUTING.md) 和 [AGENTS.md](AGENTS.md)。
+參與貢獻與協作慣例請參閱 [CONTRIBUTING.md](CONTRIBUTING.md) 與 [AGENTS.md](AGENTS.md)。
 
 ## 授權
 
