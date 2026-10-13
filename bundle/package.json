@@ -48,6 +48,9 @@
   "peerDependencies": {
     "@deepseek-ai/dsh": ">=0.2.0-rc.1"
   },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh": { "optional": true }
+  },
   "dsh": {
     "bundle": { "patch": "./cordis.patch.yml" },
     "client": {
