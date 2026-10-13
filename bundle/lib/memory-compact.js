@@ -19,7 +19,7 @@
  * `renderMemorySnapshot` feeds the whole tree in, `validatePlan` is the hard
  * gate, `applyPlan` performs every write. The model never touches a file.
  *
- * @module dsh-persona-system/memory-compact
+ * @module dsh-agent-personas/memory-compact
  */
 import { readPromptAsset } from './persona.js'
 import { PLAN_SCHEMA, renderMemorySnapshot, validatePlan, applyPlan, describePlan } from './memory-plan.js'

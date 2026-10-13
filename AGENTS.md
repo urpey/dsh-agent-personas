@@ -1,4 +1,4 @@
-# dsh-agent-personality
+# dsh-agent-personas
 
 A DeepSeek Harness plugin bundle that gives agents a persistent persona: a three-layer persona profile (`PERSONA.md`), a layered integer state system (`STATE.md`), and a URI-addressed memory tree (`memory/`) — all stored as local markdown under `.persona/<name>/`.
 
@@ -18,4 +18,4 @@ Single-context layout: `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs
 
 ### Persona library
 
-Persona profiles, state files and memory trees live under `.persona/<name>/`. See `docs/agents/persona-system.md` for the file formats, the numeric system (BASE/PALAM/JUEL/ABL-MARK/REL), and the write-channel rules enforced by the plugin's tool guard.
+Persona profiles, state files and memory trees live under `.persona/<name>/`. See `docs/agents/agent-personas.md` for the file formats, the numeric system (BASE/PALAM/JUEL/ABL-MARK/REL), and the write-channel rules enforced by the plugin's tool guard.

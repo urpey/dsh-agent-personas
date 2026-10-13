@@ -1,6 +1,6 @@
 # Persona System: File Formats & Write Rules
 
-The `dsh-persona-system` plugin bundle gives equipped agents a persistent persona whose files live under `.persona/<name>/` in the project workspace.
+The `dsh-agent-personas` plugin bundle gives equipped agents a persistent persona whose files live under `.persona/<name>/` in the project workspace.
 
 ## Layout
 
@@ -281,7 +281,7 @@ Degradation: a gate step that produced no call is re-asked once, at a later step
 
 **Immersion boundary** — the persona never surfaces the plugin machinery in visible text: no `memory://` URIs, `.persona` paths, filenames, section names, tool names, or state numbers. Two-layer enforcement: (1) the protocol's Immersion boundary section forbids it; (2) a `session/event` listener scans each `assistant/message` for leak markers and *stores* a `[persona ooc]` correction that the next pre-step delivers — the leaked words are already said, but the next reply re-enters character. It is stored rather than injected on the spot because the listener runs inside the session's own append publish, where a nested `inject` throws (`cannot reenter while another append is being published`) and the correction was silently lost. `<thinking>…</thinking>` contents are stripped before scanning — mechanism vocabulary is legal inside the tags.
 
-Config (`cordis.patch.yml` row `persona-system`, user patch can override):
+Config (`cordis.patch.yml` row `agent-personas`, user patch can override):
 
 | Key | Default | Effect |
 |---|---|---|

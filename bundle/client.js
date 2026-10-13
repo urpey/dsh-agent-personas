@@ -1,5 +1,5 @@
 /**
- * dsh-persona-system — browser half of the persona bundle.
+ * dsh-agent-personas — browser half of the persona bundle.
  *
  * The `/` menu's command rows are rendered by `@deepseek-ai/dsh-client-ui-commands`.
  * A HOST command row (`/persona`, registered in `lib/commands.js`) can only carry
@@ -16,7 +16,7 @@
  */
 
 window.__ModuleLoader__.load({
-  id: '@local/dsh-persona-system',
+  id: '@local/dsh-agent-personas',
   factory(require) {
     const React = require('react')
     const h = React.createElement
@@ -162,7 +162,7 @@ window.__ModuleLoader__.load({
       apply(ctx) {
         const locale = ctx.get('locale')
         if (locale !== undefined) {
-          ctx.effect(() => locale.register(NS, { zh, en }), 'persona-system: dictionaries')
+          ctx.effect(() => locale.register(NS, { zh, en }), 'agent-personas: dictionaries')
         }
         const t = locale === undefined ? identity : locale.bind(NS)
 
@@ -336,7 +336,7 @@ window.__ModuleLoader__.load({
                 await runHostLine(session, row.line)
               },
             },
-          }), 'persona-system: /personas contribution')
+          }), 'agent-personas: /personas contribution')
         })
       },
     }

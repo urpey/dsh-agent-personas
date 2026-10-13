@@ -17,7 +17,10 @@ import { gateInstruction, signalsLine, stageOnePrompt, stageTwoPrompt, mergeReac
 import { appendRoute } from './route-log.js'
 import { transformThinkingStream, stripThinkingFromMessages } from './thinking-tags.js'
 
-const PLUGIN = 'dsh-persona-system'
+const PLUGIN = 'dsh-agent-personas'
+// Sessions persisted before the rename carry `source.kind: 'dsh-persona-system'`
+// on this plugin's injected messages; latestText must still accept them.
+const LEGACY_PLUGIN = 'dsh-persona-system'
 const WRITE_TOOLS = new Set(['write', 'edit', 'multi_edit', 'bash'])
 
 function userMsg(text) {
@@ -541,7 +544,7 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
       const blocks = m?.content
       if (!Array.isArray(blocks)) continue
       const kind = m?.source?.kind
-      if (kind && kind !== 'user' && kind !== 'dsh-persona-system' && kind !== 'model') continue
+      if (kind && kind !== 'user' && kind !== PLUGIN && kind !== LEGACY_PLUGIN && kind !== 'model') continue
       const text = blocks.filter(b => b?.type === 'text').map(b => b.text).join('\n')
       if (text && !text.startsWith('[persona')) return { text, kind }
     }

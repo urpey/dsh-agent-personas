@@ -1,5 +1,5 @@
 /**
- * dsh-persona-system — persistent persona engine for DeepSeek Harness.
+ * dsh-agent-personas — persistent persona engine for DeepSeek Harness.
  *
  * A single Host plugin row. It:
  *  - watches `agent/created` for persona-bound agents (the pending maps of a
@@ -29,7 +29,7 @@ import { randomUUID } from 'node:crypto'
 const NEVER_ABORTS = new AbortController().signal
 
 export default {
-  name: 'persona-system',
+  name: 'agent-personas',
   inject: ['agents', 'commands', 'subagents', 'tools', 'systemPrompt', 'llm'],
   // NOTE: must be an arrow/prototype-less function — cordis treats any
   // plugin callback with a .prototype as a constructor (isConstructor) and

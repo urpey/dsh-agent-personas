@@ -9,7 +9,7 @@ import { pendingContinuable, personaBodyText } from './provider.js'
 import { persistBinding, clearBinding } from './bindings.js'
 import { compactWithLlm } from './memory-compact.js'
 
-const PLUGIN = 'dsh-persona-system'
+const PLUGIN = 'dsh-agent-personas'
 
 /**
  * A signal that never aborts.

@@ -1,6 +1,6 @@
 - insert:
-    - id: persona-system
-      name: '@local/dsh-persona-system'
+    - id: agent-personas
+      name: '@local/dsh-agent-personas'
       config:
         libraryDir: '.persona'
         groundingInterval: 0

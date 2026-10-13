@@ -1,5 +1,5 @@
 {
-  "name": "@local/dsh-persona-system",
+  "name": "@local/dsh-agent-personas",
   "version": "0.1.0",
   "private": true,
   "type": "module",
