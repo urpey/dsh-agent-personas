@@ -4,21 +4,29 @@
  * the memory/state tool surface, the .persona write guard, buff ticking, and
  * the closing reflection. Returns a disposer for `/persona off`.
  */
-import { join, resolve } from 'node:path'
+import { join, resolve, dirname } from 'node:path'
 import { readFileSync, existsSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { renderPersonaBody, ensurePersona, readPromptAsset, PROFILE_MARKER } from './persona.js'
 import * as memory from './memory-store.js'
 import * as state from './state-store.js'
 import { renderStateSummary } from './state-store.js'
 import { splitFrontmatter } from './frontmatter.js'
-import { assessTurn } from './critical.js'
-import { modeNotice, stageTwoPrompt, mergeReactions } from './critical-prompts.js'
+import { gateInstruction, signalsLine, stageOnePrompt, stageTwoPrompt, mergeReactions,
+         GATE_ACK_CRITICAL, GATE_ACK_ROUTINE, REPLY_DIRECTIVE } from './critical-prompts.js'
+import { appendRoute } from './route-log.js'
 
 const PLUGIN = 'dsh-persona-system'
 const WRITE_TOOLS = new Set(['write', 'edit', 'multi_edit', 'bash'])
 
 function userMsg(text) {
   return {
+    // Every injected message carries its own id. The inbox rejects a duplicate
+    // pending id across both lists, and a message with NO id collides with any
+    // other id-less message — so an unidentified injection could throw (losing
+    // the directive) whenever another plugin happened to have something queued.
+    // The harness mints user-message ids the same way: a UUID string.
+    id: randomUUID(),
     role: 'user',
     content: [{ type: 'text', text }],
     // v4 format rejects the retired `plugin` wrapper; use a producer-owned kind.
@@ -148,6 +156,13 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
   // ---- immersion watch ---------------------------------------------------
   // If the persona leaks machinery nouns in visible text, inject an OOC
   // correction — can't unsay it, but the next reply returns to character.
+  //
+  // The correction is *stored*, not injected here: this listener runs inside the
+  // session's own append publish, and a nested `inject()` throws ("cannot reenter
+  // while another append is being published"), which silently dropped every
+  // correction. The pre-step hook delivers it with the rest of the step's
+  // context — which is the step the correction is for anyway.
+  let pendingOoc = ''
   const LEAK = /\bmemory:\/\/|\.persona\b|PERSONA\.md|STATE\.md|MEMORY\.md|persona:state|persona-profile|state_delta|state_settle|memory_(read|create|update|delete|alias|list|search)|buff_(apply|clear)|closingReflection|\b(STATE|TRIGGERS|REFUSAL|VOICE)\s*:/i
   reg(agentCtx.on('session/event', (session, event) => {
     if (session !== agent.session || event.type !== 'assistant/message') return
@@ -158,11 +173,16 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
     const visible = blocks.filter(b => b?.type === 'text').map(b => b.text).join('\n')
       .replace(/<thinking>[\s\S]*?<\/thinking>/g, '')
     if (!LEAK.test(visible)) return
-    agent.inject?.(userMsg('[persona ooc] That last reply surfaced mechanism internals — filenames, URIs, tool names, or state numbers. Drop the machinery; answer as the persona, embody the feeling without reporting it.'))
+    pendingOoc = '[persona ooc] That last reply surfaced mechanism internals — filenames, URIs, tool names, or state numbers. Drop the machinery; answer as the persona, embody the feeling without reporting it.'
   }))
 
   // ---- write-channel guard ----------------------------------------------
   const libRoot = resolve(personaDir)
+  // The route log belongs to the LIBRARY, not the persona: `.persona/.routes/`
+  // sits beside `.bindings/` so it survives `/persona off` and one session's
+  // verdicts stay one file. `libRoot` is the persona dir (the write guard's
+  // boundary), so step up one level for the library.
+  const routesRoot = dirname(libRoot)
   reg(agentCtx.on('tools/pre-execute', async (exec, next) => {
     if (!WRITE_TOOLS.has(exec.name)) return next()
     const args = typeof exec.arguments === 'string' ? exec.arguments : JSON.stringify(exec.arguments ?? {})
@@ -305,10 +325,61 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
   T(jsonTool('inner_commit',
     'Commit the inner monologue you just emitted in <thinking>…</thinking>. Call this immediately after the block on a critical turn — it ends stage 1 and hands you the stage-2 transform directive.',
     { type: 'object', properties: {}, additionalProperties: false },
-    async (_a, exec) => {
-      try { exec?.agent?.session?.append('persona/stage', { stage: 2, turn: 'mark' }) } catch { /* log-only marker */ }
+    async (_a) => {
+      // No `session.append('persona/stage', …)` here: `Session.append` cannot
+      // mark an out-of-tree type `ignorable: true`, so the event persisted as
+      // a required unknown and made the whole log refuse to restore (see the
+      // "durable binding fact" note below — same rule).
+      // The monologue landed, so turn-stopping must not queue stage 2 again.
+      awaitingMonologue = false
       return stageTwoPrompt({ name })
     }))
+
+  // ---- persona_gate: the model's verdict, carried by a stub tool -------------
+  // The criteria live in prompts/protocol.md and the step-1 instruction, never
+  // here: the tool holds no judgment, it records the verdict the model already
+  // made and hands back the directive for the next step. `reason` is the model's
+  // own words and opens the stage-1 directive, so the monologue starts from its
+  // own reasoning instead of a code-generated string.
+  reg(agentCtx.tools.register({
+    name: 'persona_gate',
+    description: 'Rule whether this turn deserves deliberation — loaded turns think first. Call it alone, before any reply text.',
+    parameters: {
+      type: 'object',
+      properties: {
+        critical: { type: 'boolean' },
+        reason: { type: 'string', description: 'why, in your own words — it opens the stage-1 directive' },
+      },
+      required: ['critical'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: {},
+      render: (_args, value) => [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value) }],
+    },
+    execute: async (args, exec) => {
+      const critical = args?.critical === true
+      const reason = typeof args?.reason === 'string' ? args.reason.trim() : ''
+      gateCalled = true
+      awaitingMonologue = critical
+      let st = {}
+      try { st = state.loadState(personaDir).data } catch { /* unreadable state — the directive degrades */ }
+      pendingDirective = critical
+        ? stageOnePrompt({ name, mbti: meta.mbti ?? '', state: st, reason })
+        : REPLY_DIRECTIVE
+      // The next step must read the state the verdict was ruled against.
+      contextDirty = true
+      appendRoute(routesRoot, exec?.agent?.session?.header?.id, {
+        at: new Date().toISOString(),
+        turn: lastTurn,
+        step: lastStep,
+        verdict: critical ? 'critical' : 'routine',
+        reason,
+        signals: lastSignals,
+      })
+      return critical ? GATE_ACK_CRITICAL : GATE_ACK_ROUTINE
+    },
+  }))
 
   // Observe turn failures through the agent scope logger (host log).
   reg(agentCtx.on('agent/error', ({ turn, step, error }) => {
@@ -317,13 +388,42 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
 
   // ---- turn lifecycle: buff tick + optional grounding + memory recall ----
   let lastTurn = -1
+  let lastStep = -1
   const recalled = new Set()          // uris injected this session — no repeats
   const groundingText = cfg.groundingInterval > 0 ? readPromptAsset('grounding.md').trim() : ''
 
+  /**
+   * Queue model-facing context on the inbox, never letting a queue failure take
+   * the turn down with it.
+   *
+   * Why the guard matters: `inject()` is a splice into the pending inbox, and the
+   * inbox rejects a second id-less message while one is already pending. These
+   * notices are worth delivering, but they are not worth a turn — and a throw
+   * here would happen at the turn boundary, before any model request, so the
+   * reader would get nothing at all.
+   */
+  const notice = (text) => {
+    try { agent.inject?.(userMsg(text)) } catch (e) {
+      agentCtx.logger?.warn?.(`[persona:${name}] notice dropped — ${text}:`, e)
+    }
+  }
+
+  // Gate state, scoped to one turn. The verdict is produced by the model mid-turn,
+  // so the directive it earns cannot ride the step that produced it — it is owed
+  // to the NEXT step, and these four flags are the whole state machine.
+  let pendingDirective = ''    // directive owed to the next step
+  let awaitingMonologue = false // critical verdict committed, inner_commit not yet called
+  let gateCalled = false       // this turn produced a verdict
+  let gateOffered = false      // the gate instruction was shown at least once
+  let gateReoffered = false    // ...and the one re-ask has been spent
+  let lastSignals = ''         // rendered signals, for the route log
+
   /** Text of the newest REAL user input in this step — skip runtime snapshots
-   *  (time-context/skill-catalog/instructions) that ride in the same step. */
-  const latestText = (decision) => {
-    const msgs = decision?.messages ?? []
+   *  (time-context/skill-catalog/instructions) that ride in the same step.
+   *  Returns the source kind too: the gate rules on the USER's turn, so it must
+   *  never be re-triggered by the assistant's own last message. */
+  const latestText = (messages) => {
+    const msgs = messages ?? []
     for (let i = msgs.length - 1; i >= 0; i--) {
       const m = msgs[i]
       const blocks = m?.content
@@ -331,9 +431,9 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
       const kind = m?.source?.kind
       if (kind && kind !== 'user' && kind !== 'dsh-persona-system' && kind !== 'model') continue
       const text = blocks.filter(b => b?.type === 'text').map(b => b.text).join('\n')
-      if (text && !text.startsWith('[persona')) return text
+      if (text && !text.startsWith('[persona')) return { text, kind }
     }
-    return ''
+    return { text: '', kind: undefined }
   }
 
   /** Memory nodes whose triggers appear in the input (case-insensitive). */
@@ -346,17 +446,30 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
       .slice(0, 3)
   }
 
-  reg(agentCtx.on('agent/pre-step', async ({ turn, step }, next) => {
+  reg(agentCtx.on('agent/pre-step', async ({ turn, step, messages }, next) => {
+    lastStep = step
     if (turn !== lastTurn) {
       lastTurn = turn
+      // A new turn rules its own verdict: nothing carries over.
+      gateCalled = false
+      gateOffered = false
+      gateReoffered = false
+      awaitingMonologue = false
+      pendingDirective = ''
+      lastSignals = ''
       // Turn-level body clock: buffs age, base fields drift — one write per turn.
       const expired = state.tickBuffs(personaDir)
       state.tickBase(personaDir, { turn })
-      if (expired.length) agent.inject?.(userMsg(`[persona] buffs expired: ${expired.join(', ')}`))
+      // Both notices ride ONE queue call: a second id-less pending message is
+      // rejected by the inbox, and at the turn boundary that rejection used to
+      // abort the turn before any request was made.
+      const notices = []
+      if (expired.length) notices.push(`[persona] buffs expired: ${expired.join(', ')}`)
       if (reactionsError) {
-        agent.inject?.(userMsg(`[persona] PERSONA.md reactions ignored — ${reactionsError}`))
+        notices.push(`[persona] PERSONA.md reactions ignored — ${reactionsError}`)
         reactionsError = ''
       }
+      if (notices.length) notice(notices.join('\n'))
       // The state block is stale by construction after a tick. This assignment
       // used to sit after `lastTurn = turn`, so it never fired and a drifted
       // body only reached the model once some mutator tool happened to run.
@@ -365,30 +478,35 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
     const decision = await next()
     if (decision.kind !== 'enter') return decision
     const extra = []
-    const text = latestText(decision)
-    // Fresh persona context first, so the mode notice can point at it.
+    // The payload carries this step's claimed messages; the terminal decision may
+    // not, so read the input from the payload.
+    const { text, kind: textKind } = latestText(messages)
+    // Fresh persona context first, so everything after it can point at it.
     if (contextDirty) {
       const ctxText = personaContextText()
       if (ctxText) extra.push(userMsg(ctxText))
       contextDirty = false
     }
-    // Step 0 — the gate, run BEFORE this turn's generation starts.
-    // It fixes the turn's shape: 1 segment (reply) or 2 (<thinking> + reply).
-    // Both shapes are a single LLM call; only the segment count differs.
-    if (step === 1 && text && !text.startsWith('[persona')) {
-      try {
-        const st = state.loadState(personaDir)
-        const gate = cfg.criticalGate ?? 'auto'
-        const { critical, reason } = gate === 'never'
-          ? { critical: false, reason: '' }
-          : gate === 'always'
-            ? { critical: true, reason: 'gate forced always' }
-            : assessTurn({ text, meta, state: st.data, extraKeywords: cfg.criticalKeywords ?? [] })
-        extra.push(userMsg(modeNotice({
-          mode: critical ? 'staged' : 'one',
-          mbti: meta.mbti ?? '', state: st.data, reason,
-        })))
-      } catch { /* unreadable state — turn proceeds without a mode notice */ }
+    // The directive a verdict earned, owed to the step after it. Injected once.
+    if (pendingDirective) {
+      extra.push(userMsg(pendingDirective))
+      pendingDirective = ''
+    }
+    // Gate step — the verdict is the model's, so the turn opens with the
+    // imperative rather than a mode notice decided in code. Offered on the first
+    // user-bearing step of a turn, and re-offered ONCE if that step went by
+    // without a verdict (a model may answer straight away; the turn is not
+    // interrupted, it is asked once more and then logged as a miss).
+    if (!gateCalled && (!gateOffered || !gateReoffered) && step <= 2 && text && textKind === 'user') {
+      let st = {}
+      try { st = state.loadState(personaDir).data } catch { /* unreadable state — signals degrade */ }
+      lastSignals = signalsLine({ state: st, meta, text })
+      const forced = cfg.criticalGate === 'always' || cfg.criticalGate === 'never'
+        ? cfg.criticalGate
+        : undefined
+      if (gateOffered) gateReoffered = true
+      gateOffered = true
+      extra.push(userMsg(gateInstruction({ signals: lastSignals, forced })))
     }
     // Trigger-based recall: inject full node bodies for hits not yet shown.
     for (const hit of recallHits(text)) {
@@ -399,7 +517,69 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
       } catch { /* node vanished between list and read */ }
     }
     if (groundingText && step % cfg.groundingInterval === 0) extra.push(userMsg(groundingText))
+    // The immersion correction stored by the leak watcher, delivered at the step
+    // it is for. It goes before the gate instruction: it is about the previous
+    // reply, and the gate — when this step carries one — must stay the last thing
+    // the model reads.
+    if (pendingOoc) {
+      extra.push(userMsg(pendingOoc))
+      pendingOoc = ''
+    }
+    // The gate instruction is the LAST thing the model reads, so the verdict is
+    // ruled on the whole input — recall bodies, grounding, and any correction
+    // included — rather than on a partial view with context appended after the ask.
+    const gateMsg = extra.findIndex(m => String(m.content?.[0]?.text ?? '').startsWith('[persona gate]'))
+    if (gateMsg >= 0 && gateMsg !== extra.length - 1) extra.push(extra.splice(gateMsg, 1)[0])
     return extra.length ? { ...decision, messages: [...decision.messages, ...extra] } : decision
+  }))
+
+  // ---- turn-stopping recovery ---------------------------------------------
+  // Registered before the closing reflection (handlers fire in registration
+  // order) so a turn that owes itself a directive pays it before housekeeping.
+  reg(agentCtx.on('agent/turn-stopping', ({ agent: stopped }) => {
+    const sessionId = stopped?.session?.header?.id ?? agent?.session?.header?.id
+    // A verdict with no step left to consume it. A tool call normally opens
+    // another step, so this is rare — but if the gate call was the step's last
+    // act, the directive would be lost with it.
+    //
+    // `inject` alone is the right call here, and adding `followup` was a defect:
+    // the inbox rejects a second pending id-less message, so the pair threw on
+    // every run (inside a bare catch) and never woke the driver; with identified
+    // messages it would instead deliver the same directive twice. A non-empty
+    // next-step queue is itself what makes the loop re-enter, so one queue call
+    // delivers exactly once.
+    if (pendingDirective) {
+      const owed = pendingDirective
+      pendingDirective = ''
+      notice(owed)
+      return
+    }
+    // A critical turn that never committed its monologue must not end as a bare
+    // monologue or a silent drop — hand it the transform directive. This one
+    // does need `followup`: the turn has genuinely ended, and nothing else will
+    // wake the driver for a message the model owes itself.
+    if (awaitingMonologue) {
+      awaitingMonologue = false
+      try { agent.followup(userMsg(stageTwoPrompt({ name }))) } catch (e) {
+        agentCtx.logger?.warn?.(`[persona:${name}] stage-2 recovery failed:`, e)
+      }
+      return
+    }
+    // The model answered without ever ruling. The turn is left intact — the
+    // reader got an answer — but the miss is what the route log exists to show.
+    // Only a turn that was actually OFFERED the gate can miss it: a turn with no
+    // user text (a closing-reflection housekeeping turn, for one) was never asked,
+    // and logging that as non-compliance would make the log lie.
+    if (!gateCalled && gateOffered) {
+      appendRoute(routesRoot, sessionId, {
+        at: new Date().toISOString(),
+        turn: lastTurn,
+        step: lastStep,
+        verdict: 'missed',
+        reason: '',
+        signals: lastSignals,
+      })
+    }
   }))
 
   // ---- closing reflection (one-shot and opt-in) ---------------------------

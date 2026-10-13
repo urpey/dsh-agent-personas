@@ -8,6 +8,8 @@ The `dsh-persona-system` plugin bundle gives equipped agents a persistent person
 .persona/
   .bindings/            # session→persona ledger (runtime, gitignored)
     <sessionId>.json    # { name, boundAt } — written by /persona use, cleared by /persona off
+  .routes/              # gate verdict log (runtime, gitignored)
+    <sessionId>.jsonl   # one line per verdict: { at, turn, step, verdict, reason, signals }
   <name>/
     PERSONA.md        # identity + voice (agent-read-only; only humans edit)
     STATE.md          # layered numeric state (tools only; see below)
@@ -213,14 +215,20 @@ Turn hooks (`agent/pre-step`, `agent/turn-stopping`):
 - **Closing reflection** — when `config.closingReflection` matches the mode (`one-shot` default), turn end queues `prompts/closing.md` as a followup turn. `state_settle` is unconditional; `memory_create` is conditional — write only when something is worth keeping, never a filler note. The closing prompt also asks the agent to tidy a bloated index (merge/reprioritize/alias/delete).
 - **One-shot output rewind** — the reflection adds a housekeeping turn, which would make `readResult` return its chatter instead of the task answer. The `persona` provider wraps `run.result`: for a staged (critical) turn it returns the first visible text AFTER the last `inner_commit` call — never the monologue; for a routine turn, the last assistant message before the `[persona closing]` injection.
 
-Dual-process protocol (prompts/protocol.md): step 0 of every turn runs the gate (`assessTurn`) and injects a mode notice that fixes the turn's shape before anything is generated.
+Dual-process protocol (`prompts/protocol.md`): the gate is a verdict the model rules, and the turn gains a decision step to carry it.
 
-- `[persona 1-step turn]` — routine: one step, reply directly, no `<thinking>`.
-- `[persona 2-step turn]` — critical: step 1 emits only the `<thinking>…</thinking>` monologue (`STATE:` verbatim copy from the context block, `TRIGGERS:`, `REFUSAL:`, `VOICE:`, then free expansion) and calls `inner_commit`; the tool returns the stage-2 transform directive, and step 2 produces the reply. Staging is structural: the monologue cannot be skipped, and the transform gets its own directive.
+- **Step 1 — the instruction.** `gateInstruction()` injects `[persona gate]`: the imperative, the forced-mode sentence when `criticalGate` is `always`/`never`, and a `## Signals` block of deterministic facts only — speaker known (with relation values) or first contact, declared `interests`, palam fields at or above 30, active buffs, and the input truncated to 160 chars. It is the last thing in the step input, after the persona context block. The same signals string is what the route log records.
+- **The verdict.** The model's only output on that step is `persona_gate({ critical, reason? })`. The tool holds no criteria and makes no judgment: it records the verdict and returns a one-line acknowledgement. `reason` is the model's own words for why the turn is loaded, quoted into the stage-1 directive.
+- **Step 2 — the directive.** The directive the verdict owes is injected once, at the next step: `REPLY_DIRECTIVE` (`[persona reply]`) for routine, or `stageOnePrompt()` (`[persona stage 1 of 2]`) for critical. The critical path keeps the staged shape: step 2 emits only the `<thinking>…</thinking>` monologue (`STATE:` verbatim copy from the context block, `TRIGGERS:`, `REFUSAL:`, `VOICE:`, then free expansion) and calls `inner_commit`; the tool returns the stage-2 transform directive, and step 3 produces the reply. Staging is structural: the monologue cannot be skipped, and the transform gets its own directive.
+- **Cost.** Routine 2 requests (gate step + reply), critical 3 (gate step, monologue step, reply step) — one more than before in both shapes. The gate step is small: its output is the call, ~15 tokens.
 
-The staged shape costs one extra request per critical turn; a routine turn is a single request. The leak scanner strips `<thinking>` contents before matching, so state numbers/URIs inside the tags never trigger an OOC correction. State deltas are recorded at the moment they happen, not batched.
+Degradation: a gate step that produced no call is re-asked once, at a later step of the same turn that carries new user input (`step <= 2`); after that the turn proceeds and the route log records `verdict: 'missed'` — a turn that was never offered the gate is not logged as a miss. A critical verdict whose `inner_commit` never arrived gets the stage-2 directive queued by `agent/turn-stopping` as a followup turn, so the reader never receives a bare monologue. A directive still pending when the turn stops is queued once on the step inbox (`agent.inject`), not as a followup: a non-empty next-step queue is itself what makes the loop re-enter, and the inbox rejects a second pending id-less message — so an inject+followup pair would either throw or deliver the directive twice. State deltas are recorded at the moment they happen, not batched.
 
-**Immersion boundary** — the persona never surfaces the plugin machinery in visible text: no `memory://` URIs, `.persona` paths, filenames, section names, tool names, or state numbers. Two-layer enforcement: (1) the protocol's Immersion boundary section forbids it; (2) a `session/event` listener scans each `assistant/message` for leak markers and injects a `[persona ooc]` correction into the next step when found — the leaked words are already said, but the next reply re-enters character. `<thinking>…</thinking>` contents are stripped before scanning — mechanism vocabulary is legal inside the tags.
+**Turn-start notices** — buff expiry and a malformed `reactions` table both ride one `agent.inject` queue call (`notice()`), never two: the inbox rejects a second pending id-less message, and at the turn boundary that rejection aborted the whole turn before any model request, so the reader got nothing. `notice()` logs the failure instead of throwing.
+
+**Identified injections** — every message the plugin injects carries its own `id` (a UUID, the same shape the harness mints for user messages). The inbox rejects a duplicate pending id across the step and turn lists, so an id-less injection collides with *any* other id-less message already queued — a foreign plugin's followup was enough to throw away an owed directive and, separately, to lose a closing reflection. Identified messages cannot collide.
+
+**Immersion boundary** — the persona never surfaces the plugin machinery in visible text: no `memory://` URIs, `.persona` paths, filenames, section names, tool names, or state numbers. Two-layer enforcement: (1) the protocol's Immersion boundary section forbids it; (2) a `session/event` listener scans each `assistant/message` for leak markers and *stores* a `[persona ooc]` correction that the next pre-step delivers — the leaked words are already said, but the next reply re-enters character. It is stored rather than injected on the spot because the listener runs inside the session's own append publish, where a nested `inject` throws (`cannot reenter while another append is being published`) and the correction was silently lost. `<thinking>…</thinking>` contents are stripped before scanning — mechanism vocabulary is legal inside the tags.
 
 Config (`cordis.patch.yml` row `persona-system`, user patch can override):
 
@@ -230,13 +238,15 @@ Config (`cordis.patch.yml` row `persona-system`, user patch can override):
 | `groundingInterval` | `0` | Steps between grounding injections (0 = off) |
 | `closingReflection` | `one-shot` | `one-shot` / `always` / `never` |
 | `providerName` | `persona` | `ctx.subagents` provider name |
-| `criticalGate` | `auto` | `auto` (assess the turn) / `always` (every turn critical) / `never` (every turn routine) |
-| `criticalKeywords` | `[]` | Extra keywords that force a critical turn, on top of the built-in zh/en tables |
+| `criticalGate` | `auto` | `auto` (the model rules each turn via `persona_gate`) / `always` (every turn critical) / `never` (every turn routine) |
 
 Binding persistence (resume after restart): `/persona use` writes `.persona/.bindings/<sessionId>.json`; on the next `agent/created` the plugin reads it back and re-equips as `mode: 'session'`. **Do not reintroduce a `persona/bound` session event** — live `Session.append` cannot mark an event `ignorable: true`, so an out-of-tree event type persists as a required unknown and `validateStoredEvents` refuses to restore the whole session (session becomes unopenable). Spawned children don't need the ledger: their `subagent/descriptor` carries the `persona-profile:` marker.
 
+Route log (gate audit): every verdict appends one JSON line to `.persona/.routes/<sessionId>.jsonl` — `{ at, turn, step, verdict, reason, signals }`, where `at` is ISO-8601 and `verdict` is `critical | routine | missed` (`missed` = the turn ended with no verdict). `signals` is the rendered signal block the model ruled against, so a ruling can be reviewed after the fact. Appends are best-effort: an unwritable log never breaks a turn. **Do not turn it into a session event** — the same `ignorable` hazard as `.persona/.bindings/` above applies verbatim.
+
 ## Known limitations
 
+- The gate is model judgment with no deterministic floor: a loaded turn ruled routine is visible only in the route log, after the fact.
 - `/persona` command cards don't render in a brand-new session until the first message sends: DSH's chat shell hides the transcript while `conversationPhase === 'blank'` (`activeTargets` requires a non-command chat node; `promptAttempted` flips on first submit). Harness-side behavior, same for all host commands.
 - Reaction calibration is advisory by design: the model names the event and keeps
   final say, so a wrong event label produces a confidently calibrated wrong delta.

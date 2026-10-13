@@ -3,7 +3,7 @@ name: {{name}}
 description: {{description}}
 triggers: []
 mbti: ''            # e.g. INTP — tunes the inner monologue AND seeds reaction defaults
-interests: []       # topic keywords; a hit marks the turn critical
+interests: []       # topics that make a turn loaded — the gate reads them as a signal, you rule
 reactions: {}       # optional: event → { palam|base|relations: { field: multiplier } }
                     # e.g. praise: { palam: { joy: 1.5 }, base: { satiety: 0.3 } }
                     # a declared event layer replaces the MBTI default for that event

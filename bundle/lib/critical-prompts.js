@@ -1,10 +1,13 @@
 /**
- * Turn-mode notices — the gate, expressed as ONE-call segments.
+ * Gate prompts — the text surface of the model-ruled critical gate.
  *
- * The step-0 gate decides the turn's shape BEFORE generation starts:
- *   - single segment (routine): the reply alone.
- *   - two segments (critical): a <thinking> inner monologue, then the reply —
- *     both inside the SAME response, so the turn costs one LLM call.
+ * The verdict belongs to the model (`persona_gate`), so this module holds no
+ * criteria and maps no word to a verdict: it renders the step-1 imperative that
+ * orders the verdict (`gateInstruction`), the deterministic facts the retired
+ * keyword table used to compute (`signalsLine`), and the directives a verdict
+ * earns — the monologue step (`stageOnePrompt`), the reply-only step
+ * (`REPLY_DIRECTIVE`), and the transform handed back by `inner_commit`
+ * (`stageTwoPrompt`).
  *
  * The monologue is parameterized
  * on this system's knobs: MBTI profile + live STATE (palam peaks, base gauges,
@@ -147,15 +150,87 @@ function stateRules(state = {}) {
 }
 
 /**
- * The notice injected on the FIRST step of a turn — this is step 0 of the
- * the gate, and it fixes the turn's shape before anything is generated.
- * @param mode - 'staged' (critical: monologue step, then reply step) | 'one' (routine: reply only)
+ * Deterministic gate inputs, rendered as `- ` lines. Cheap facts only — the
+ * model reads the input itself; code must not score it.
+ *
+ * Every access is guarded (`?? {}`, `|| 0`) so a malformed state file yields a
+ * thinner signal line instead of breaking the turn. The first-contact line is
+ * always present, so this never returns '' — the caller may show it verbatim.
+ *
+ * @param opts.state - loaded STATE.md data (relations/palam/buffs)
+ * @param opts.meta  - PERSONA.md frontmatter (interests)
+ * @param opts.text  - this turn's newest real user input, truncated for display
  */
-export function modeNotice({ mode, mbti = '', state = {}, reason = '' }) {
-  if (mode === 'one') {
-    return `[persona 1-step turn — routine] Reply directly, in voice. No <thinking> block, no preamble, no self-check.`
-  }
-  return `[persona 2-step turn — CRITICAL: ${reason}]
+export function signalsLine({ state = {}, meta = {}, text = '' } = {}) {
+  const lines = []
+  const rel = state.relations ?? {}
+  const known = Object.entries(rel)
+    .map(([k, r]) => `${k}=${Number(r?.value) || 0}`)
+    .join(', ')
+  lines.push(known ? `- speaker: known (relations ${known})` : '- speaker: first contact — no relation record yet')
+  const interests = (meta.interests ?? []).filter(Boolean)
+  if (interests.length) lines.push(`- interests (from your profile): ${interests.join(', ')}`)
+  // 30 is the same number the retired table used as a verdict threshold; here it
+  // only decides what is worth *showing* — the model reads the pressure and
+  // rules on it itself.
+  const hot = Object.entries(state.palam ?? {})
+    .map(([k, p]) => [k, Number(p?.value) || 0])
+    .filter(([, v]) => v >= 30)
+    .sort((a, b) => b[1] - a[1])
+  if (hot.length) lines.push(`- ${hot.map(([k, v]) => `${k} = ${v}`).join(', ')} — already hot`)
+  const buffs = (state.buffs ?? []).map(b => b?.name).filter(Boolean)
+  if (buffs.length) lines.push(`- active buffs: ${buffs.join(', ')}`)
+  // JSON.stringify keeps a multi-line input on one signal line and makes the
+  // truncation visible rather than silently cutting the model's evidence.
+  if (text) lines.push(`- input: ${JSON.stringify(text.length > 160 ? `${text.slice(0, 160)}…` : text)}`)
+  return lines.join('\n')
+}
+
+/**
+ * The step-1 imperative: rule the verdict, emit the call, nothing else.
+ *
+ * Both forced modes still route through the tool, so there is exactly one code
+ * path for a verdict and the route log records forced verdicts too.
+ *
+ * @param opts.signals - rendered `## Signals` lines, or '' to omit the block
+ * @param opts.forced  - 'always' | 'never' | undefined (auto)
+ */
+export function gateInstruction({ signals = '', forced } = {}) {
+  const rule = forced === 'always'
+    ? 'The gate is forced CRITICAL for this turn — rule critical:true regardless of what follows.'
+    : forced === 'never'
+      ? 'The gate is forced ROUTINE for this turn — rule critical:false regardless of what follows.'
+      : 'Does this turn deserve deliberation? Apply the gate rule from your protocol.'
+  return `[persona gate] ${rule}
+Your only output this step is ONE call — no reply text, no <thinking> yet:
+
+  persona_gate({ critical: true|false, reason: "<why, in your own words>" })
+
+${signals ? `${signals}\n\n` : ''}The reason becomes part of the stage directive when the turn is critical, so write it as yourself, not as a report.
+`
+}
+
+/** Reply directive for a routine verdict (injected at the next step). */
+export const REPLY_DIRECTIVE = '[persona reply] The gate ruled this turn routine. Reply directly, in voice. No <thinking> block, no preamble, no self-check.'
+
+/** Verdict acknowledgement returned by persona_gate. */
+export const GATE_ACK_CRITICAL = 'Verdict recorded: critical. The stage-1 directive arrives in your next input — do not reply yet.'
+export const GATE_ACK_ROUTINE = 'Verdict recorded: routine. The reply directive arrives in your next input.'
+
+/**
+ * Stage-1 directive (the monologue step) — the shape a critical verdict earns.
+ * The model's own `reason` opens it, so the block starts from the model's
+ * reading of the turn rather than a code-generated label.
+ *
+ * @param opts.name   - persona name (call-site symmetry with stageTwoPrompt; the
+ *                      directive addresses the model already wearing the persona)
+ * @param opts.mbti   - declared MBTI letters, '' for undeclared
+ * @param opts.state  - loaded STATE.md data, for the pressure lines
+ * @param opts.reason - the model's own words from persona_gate, may be ''
+ */
+export function stageOnePrompt({ name, mbti = '', state = {}, reason = '' }) {
+  return `[persona stage 1 of 2]
+The gate ruled this turn critical${reason ? ` — in your words: "${reason}"` : ''}.
 This turn gets deliberation, and the deliberation comes first: this step produces the inner monologue and NOTHING else.
 
 Write <thinking>…</thinking> now. Then call inner_commit — that ends this step and hands you the transform directive for the reply.

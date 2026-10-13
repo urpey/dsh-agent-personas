@@ -1,11 +1,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { splitFrontmatter, parseYaml } from '../lib/frontmatter.js'
 import { createPersona, renderPersonaPrefix, renderPersonaBody, stripPersonaText, listPersonas, libraryRoot } from '../lib/persona.js'
 import { readBinding, writeBinding, clearBinding } from '../lib/bindings.js'
+import { appendRoute } from '../lib/route-log.js'
+import { equipAgent } from '../lib/equip.js'
 import * as mem from '../lib/memory-store.js'
 import * as st from '../lib/state-store.js'
 import * as criticalPrompts from '../lib/critical-prompts.js'
@@ -13,6 +15,46 @@ import * as criticalPrompts from '../lib/critical-prompts.js'
 const tmp = mkdtempSync(join(tmpdir(), 'persona-'))
 const dir = createPersona(tmp, 'alice', 'test persona')
 const pd = join(tmp, '.persona', 'alice')
+
+/** A plain user turn message, as the harness claims it in a step payload. */
+const userMessage = (text) => ({ role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } })
+
+/** Minimal live agent: equip only reaches for session, inject and followup. */
+const fakeAgent = (id = 'session-test') => ({
+  session: { header: { id } }, inject: () => {}, followup: () => {},
+})
+
+/**
+ * Minimal agent context for equipAgent: records registered handlers and tools
+ * so a test can drive the hooks itself instead of standing up an agent loop.
+ */
+function fakeAgentCtx() {
+  const handlers = { 'agent/pre-step': [], 'agent/turn-stopping': [], 'session/event': [], 'tools/pre-execute': [], 'agent/error': [] }
+  const tools = new Map()
+  return {
+    handlers, tools,
+    ctx: {
+      systemPrompt: { section: () => () => {}, getSectionOrder: () => 0 },
+      on: (name, fn) => { (handlers[name] ??= []).push(fn); return () => {} },
+      tools: { register: (def) => { tools.set(def.name, def); return () => {} } },
+      logger: { warn: () => {} },
+    },
+  }
+}
+
+/** Drive equip's pre-step listener the way the harness does. */
+async function runPreStep(fake, payload) {
+  const handler = fake.handlers['agent/pre-step'][0]
+  return handler(payload, async () => ({ kind: 'enter', messages: [] }))
+}
+
+/** All text a pre-step decision injected, as one string for regex assertions. */
+const injectedText = (decision) => (decision.messages ?? [])
+  .flatMap(m => (m.content ?? []).map(b => b.text ?? '')).join('\n')
+
+/** The routes file a session's verdicts land in, under the `.persona/` root. */
+const routesFile = (sid) => join(libraryRoot(tmp), '.routes', `${sid}.jsonl`)
+const lastRoute = (sid) => JSON.parse(readFileSync(routesFile(sid), 'utf8').trim().split('\n').pop())
 
 test('persona skeleton exists', () => {
   assert.equal(readFileSync(join(pd, 'PERSONA.md'), 'utf8').includes('alice'), true)
@@ -111,50 +153,303 @@ test('memory_update ellipsis patch + title sanitize', () => {
   assert.match(mem.readNode(tmp, 'memory://a/b').content, /^REPLACED end/)
 })
 
-test('critical gate: criticality criteria', async () => {
-  const { assessTurn } = await import('../lib/critical.js')
-  const st = { palam: { joy: { value: 0 } }, relations: { user: { value: 5 } }, buffs: [] }
-  // first contact
-  assert.equal(assessTurn({ text: 'hi', state: { relations: {} } }).critical, true)
-  // keyword hit
-  assert.equal(assessTurn({ text: '这个 bug 是错的，重写', state: st }).critical, true)
-  // interest hit
-  assert.equal(assessTurn({ text: '聊聊数据库', meta: { interests: ['数据库'] }, state: st }).critical, true)
-  // palam pressure
-  assert.equal(assessTurn({ text: '随便看看', state: { ...st, palam: { anger: { value: 40 } } } }).critical, true)
-  // buff active
-  assert.equal(assessTurn({ text: '随便看看', state: { ...st, buffs: [{ name: 'adrenaline' }] } }).critical, true)
-  // routine
-  assert.equal(assessTurn({ text: '列一下文件', state: st }).critical, false)
-})
-
-test('turn mode notices: staged critical turn vs one-step routine turn', async () => {
-  const { modeNotice, stageTwoPrompt } = await import('../lib/critical-prompts.js')
-  const one = modeNotice({ mode: 'one' })
-  assert.match(one, /1-step turn/)
-  assert.match(one, /No <thinking> block/)
-  const two = modeNotice({
-    mode: 'staged', mbti: 'INTP', reason: 'keyword "错"',
+test('gate prompts: imperative, signals, stage-1 directive', () => {
+  const { gateInstruction, signalsLine, stageOnePrompt, stageTwoPrompt, REPLY_DIRECTIVE,
+          GATE_ACK_CRITICAL, GATE_ACK_ROUTINE } = criticalPrompts
+  // The verdict step orders ONE call and nothing else.
+  const gate = gateInstruction({ signals: signalsLine({ state: { relations: {} }, text: 'hi' }) })
+  assert.match(gate, /persona gate/)
+  assert.match(gate, /persona_gate\(\{ critical/)
+  assert.match(gate, /no reply text/)
+  assert.match(gate, /first contact/)
+  // Forced modes still route through the tool, so there is one code path.
+  assert.match(gateInstruction({ forced: 'always' }), /forced CRITICAL/)
+  assert.match(gateInstruction({ forced: 'never' }), /forced ROUTINE/)
+  assert.doesNotMatch(gateInstruction({}), /forced/)
+  // Signals: deterministic facts only, and the first-contact line always exists.
+  assert.match(signalsLine({ state: { relations: {} } }), /first contact/)
+  const sig = signalsLine({
+    state: { palam: { anger: { value: 40 } }, buffs: [{ name: 'adrenaline' }] },
+    meta: { interests: ['饭'] },
+    text: 'hi',
+  })
+  assert.match(sig, /anger = 40/)
+  assert.match(sig, /adrenaline/)
+  assert.match(sig, /饭/)
+  assert.match(sig, /input: "hi"/)
+  assert.match(signalsLine({}), /first contact/)          // never ''
+  assert.match(signalsLine({ state: { relations: { user: { value: 80 } } } }), /speaker: known \(relations user=80\)/)
+  // Stage 1 is the monologue alone — the reply is explicitly deferred.
+  const one = stageOnePrompt({
+    name: 'alice', mbti: 'INTP', reason: 'the 圆 word landed',
     state: { palam: { anger: { value: 40 } }, base: { energy: { value: 20, max: 100 } }, relations: { lead: { value: -40 } }, buffs: [{ name: 'adrenaline' }] },
   })
-  assert.match(two, /2-step turn/)
-  // Step 1 is the monologue alone — the reply is explicitly deferred.
-  assert.match(two, /call inner_commit/)
-  assert.match(two, /No reply text in this step/)
+  assert.match(one, /stage 1 of 2/)
+  assert.match(one, /the 圆 word landed/)
+  assert.match(one, /call inner_commit/)
+  assert.match(one, /No reply text in this step/)
   // MBTI letters are expanded into tuning hints, not printed raw.
-  assert.match(two, /thoughts run inward/)
-  assert.match(two, /analytic/)
+  assert.match(one, /thoughts run inward/)
+  assert.match(one, /analytic/)
   // State pressure shows up as concrete hints.
-  assert.match(two, /anger is running high \(40\)/)
-  assert.match(two, /energy is low \(20\/100\)/)
-  assert.match(two, /distrust lead/)
-  assert.match(two, /adrenaline/)
+  assert.match(one, /anger is running high \(40\)/)
+  assert.match(one, /energy is low \(20\/100\)/)
+  assert.match(one, /distrust lead/)
+  assert.match(one, /adrenaline/)
   // The state block now rides in the injected context, not a prompt section.
-  assert.match(two, /persona context VERBATIM/)
+  assert.match(one, /persona context VERBATIM/)
+  // An omitted reason renders without the line rather than as "undefined".
+  assert.doesNotMatch(stageOnePrompt({ name: 'alice' }), /in your words/)
   // Stage 2 is the transform directive handed back by inner_commit.
   const s2 = stageTwoPrompt({ name: 'alice' })
   assert.match(s2, /stage 2 of 2/)
   assert.match(s2, /Output ONLY the reply/)
+  // The routine shape and the two verdict acks.
+  assert.match(REPLY_DIRECTIVE, /No <thinking> block/)
+  assert.match(REPLY_DIRECTIVE, /routine/)
+  assert.match(GATE_ACK_CRITICAL, /critical/)
+  assert.match(GATE_ACK_ROUTINE, /routine/)
+  // The mode notice is gone: the model rules the shape, code does not.
+  assert.equal('modeNotice' in criticalPrompts, false)
+})
+
+test('route log: append-only JSONL sidecar, hostile ids contained', () => {
+  const sid = 'session-00000000-0000-4000-8000-0000000000ab'
+  const p = appendRoute(tmp, sid, {
+    at: '2026-10-11T12:00:00+08:00', turn: 1, step: 1,
+    verdict: 'critical', reason: 'the 圆 word landed', signals: '- speaker: known',
+  })
+  assert.match(p, /\.routes\/session-00000000-0000-4000-8000-0000000000ab\.jsonl$/)
+  const line = JSON.parse(readFileSync(p, 'utf8').trim())
+  assert.equal(line.verdict, 'critical')
+  assert.equal(line.reason, 'the 圆 word landed')
+  // Second append is a new line, not a rewrite.
+  appendRoute(tmp, sid, { verdict: 'routine' })
+  assert.equal(readFileSync(p, 'utf8').trim().split('\n').length, 2)
+  // Hostile session id cannot escape the routes dir.
+  const q = appendRoute(tmp, '../../escape', { verdict: 'routine' })
+  assert.equal(q.includes('..'), false)
+  // Missing id is tolerated.
+  assert.match(appendRoute(tmp, undefined, { verdict: 'routine' }), /unknown\.jsonl$/)
+  // The sanitizer stays total: a dot-only id is still a filename.
+  assert.match(appendRoute(tmp, '...', { verdict: 'routine' }), /unknown\.jsonl$/)
+  // The dir may be wiped between turns — every append re-creates it.
+  rmSync(join(tmp, '.routes'), { recursive: true, force: true })
+  assert.match(appendRoute(tmp, sid, { verdict: 'missed' }), /\.routes\//)
+  // An unwritable root degrades to undefined instead of breaking a turn.
+  assert.equal(appendRoute(join(pd, 'PERSONA.md', 'nope'), 'x', { verdict: 'routine' }), undefined)
+})
+
+test('equip gate step: the turn opens with the imperative', async () => {
+  const fake = fakeAgentCtx()
+  equipAgent(fake.ctx, fakeAgent('session-gate'), pd, 'alice',
+    { criticalGate: 'auto', groundingInterval: 0, closingReflection: 'never' }, 'session')
+  const decision = await runPreStep(fake, { turn: 1, step: 1, messages: [userMessage('hi')] })
+  const text = injectedText(decision)
+  assert.match(text, /persona gate/)
+  assert.match(text, /persona_gate/)
+  // The input was read from the payload, not the terminal decision — a plain
+  // user message must survive latestText's runtime-snapshot filter.
+  assert.match(text, /input: "hi"/)
+})
+
+test('equip routine verdict: the reply directive arrives at the next step', async () => {
+  const agent = fakeAgent('session-routine')
+  const fake = fakeAgentCtx()
+  equipAgent(fake.ctx, agent, pd, 'alice',
+    { criticalGate: 'auto', groundingInterval: 0, closingReflection: 'never' }, 'session')
+  await runPreStep(fake, { turn: 1, step: 1, messages: [userMessage('列一下文件')] })
+  const ack = await fake.tools.get('persona_gate').execute({ critical: false, reason: 'small talk' }, { agent })
+  assert.match(ack, /routine/)
+  const next = await runPreStep(fake, { turn: 1, step: 2, messages: [] })
+  assert.match(injectedText(next), /No <thinking> block/)
+  // Injected once: a later step in the same turn does not re-issue it.
+  const later = await runPreStep(fake, { turn: 1, step: 3, messages: [] })
+  assert.doesNotMatch(injectedText(later), /No <thinking> block/)
+  assert.equal(lastRoute('session-routine').verdict, 'routine')
+})
+
+test('equip critical verdict: stage 1 carries the model reason, the log records it', async () => {
+  const agent = fakeAgent('session-critical')
+  const fake = fakeAgentCtx()
+  equipAgent(fake.ctx, agent, pd, 'alice',
+    { criticalGate: 'auto', groundingInterval: 0, closingReflection: 'never' }, 'session')
+  await runPreStep(fake, { turn: 1, step: 1, messages: [userMessage('你这几天都不理我')] })
+  const ack = await fake.tools.get('persona_gate').execute({ critical: true, reason: 'the 圆 word landed' }, { agent })
+  assert.match(ack, /critical/)
+  const next = await runPreStep(fake, { turn: 1, step: 2, messages: [] })
+  const text = injectedText(next)
+  assert.match(text, /stage 1 of 2/)
+  assert.match(text, /the 圆 word landed/)
+  // The verdict lands in the sidecar log — the spec's full entry shape, not
+  // just the verdict, so a reader can reconstruct what the ruling saw.
+  const line = lastRoute('session-critical')
+  assert.equal(line.verdict, 'critical')
+  assert.equal(line.reason, 'the 圆 word landed')
+  assert.deepEqual(Object.keys(line).sort(), ['at', 'reason', 'signals', 'step', 'turn', 'verdict'])
+  assert.equal(line.turn, 1)
+  assert.match(line.signals, /input: "你这几天都不理我"/)
+})
+
+test('equip missed verdict: a turn that never ruled is logged, not interrupted', async () => {
+  const agent = fakeAgent('session-missed')
+  const followed = []
+  agent.followup = (m) => followed.push(m)
+  const fake = fakeAgentCtx()
+  equipAgent(fake.ctx, agent, pd, 'alice',
+    { criticalGate: 'auto', groundingInterval: 0, closingReflection: 'never' }, 'session')
+  // The model answers without ruling; the turn is left intact.
+  await runPreStep(fake, { turn: 2, step: 1, messages: [userMessage('hi')] })
+  fake.handlers['agent/turn-stopping'][0]({ agent })
+  const line = lastRoute('session-missed')
+  assert.equal(line.verdict, 'missed')
+  assert.equal(line.turn, 2)
+  assert.equal(followed.length, 0)
+})
+
+test('equip turn-stopping: a critical turn pays stage 2 unless inner_commit ran', async () => {
+  const gateThenStop = async (sid, commit) => {
+    const agent = fakeAgent(sid)
+    const followed = []
+    agent.followup = (m) => followed.push(m)
+    const fake = fakeAgentCtx()
+    equipAgent(fake.ctx, agent, pd, 'alice',
+      { criticalGate: 'auto', groundingInterval: 0, closingReflection: 'never' }, 'session')
+    await runPreStep(fake, { turn: 1, step: 1, messages: [userMessage('hi')] })
+    await fake.tools.get('persona_gate').execute({ critical: true, reason: 'loaded' }, { agent })
+    await runPreStep(fake, { turn: 1, step: 2, messages: [] })
+    if (commit) await fake.tools.get('inner_commit').execute({}, { agent })
+    fake.handlers['agent/turn-stopping'][0]({ agent })
+    return followed
+  }
+  // Monologue emitted but never committed: the reader must not get a bare
+  // monologue, so the transform directive is queued as the next turn.
+  const uncommitted = await gateThenStop('session-nocommit', false)
+  assert.equal(uncommitted.length, 1)
+  assert.match(uncommitted[0].content[0].text, /stage 2 of 2/)
+  // inner_commit ends stage 1 legitimately — nothing is owed at turn end.
+  assert.equal((await gateThenStop('session-committed', true)).length, 0)
+})
+
+test('equip turn-stopping: an unconsumed directive is re-queued exactly once', async () => {
+  const agent = fakeAgent('session-owed')
+  const injected = []
+  const followed = []
+  agent.inject = (m) => injected.push(m)
+  agent.followup = (m) => followed.push(m)
+  const fake = fakeAgentCtx()
+  equipAgent(fake.ctx, agent, pd, 'alice',
+    { criticalGate: 'auto', groundingInterval: 0, closingReflection: 'never' }, 'session')
+  await runPreStep(fake, { turn: 1, step: 1, messages: [userMessage('hi')] })
+  // Verdict ruled, but the turn ends before any step can consume the directive.
+  await fake.tools.get('persona_gate').execute({ critical: false, reason: 'small talk' }, { agent })
+  fake.handlers['agent/turn-stopping'][0]({ agent })
+  // ONE queue call: a non-empty next-step queue is itself what makes the loop
+  // re-enter, so a followup here would throw (the inbox rejects a second pending
+  // id-less message) or double-deliver if the messages carried ids.
+  assert.equal(injected.length, 1)
+  assert.match(injected[0].content[0].text, /No <thinking> block/)
+  assert.equal(followed.length, 0)
+  // Paid once: a second turn-stopping does not re-queue it.
+  fake.handlers['agent/turn-stopping'][0]({ agent })
+  assert.equal(injected.length, 1)
+})
+
+test('equip gate offered twice: a step-2 user input still gets the imperative', async () => {
+  const agent = fakeAgent('session-reask')
+  const fake = fakeAgentCtx()
+  equipAgent(fake.ctx, agent, pd, 'alice',
+    { criticalGate: 'auto', groundingInterval: 0, closingReflection: 'never' }, 'session')
+  // A turn whose first step goes by without a verdict.
+  const first = await runPreStep(fake, { turn: 9, step: 1, messages: [userMessage('hi')] })
+  assert.match(injectedText(first), /persona_gate/)
+  // A later user-bearing step in the same turn re-offers it once, so a turn whose
+  // first step was answered on reflex is still routed.
+  const second = await runPreStep(fake, { turn: 9, step: 2, messages: [userMessage('还有这个')] })
+  assert.match(injectedText(second), /persona_gate/)
+  // ...but not a third time, and not without new user input.
+  const third = await runPreStep(fake, { turn: 9, step: 3, messages: [userMessage('还有')] })
+  assert.doesNotMatch(injectedText(third), /persona_gate/)
+  const fourth = await runPreStep(fake, { turn: 9, step: 4, messages: [] })
+  assert.doesNotMatch(injectedText(fourth), /persona_gate/)
+})
+
+test('equip miss log: a turn never offered the gate is not a compliance miss', async () => {
+  const agent = fakeAgent('session-notasked')
+  const fake = fakeAgentCtx()
+  equipAgent(fake.ctx, agent, pd, 'alice',
+    { criticalGate: 'auto', groundingInterval: 0, closingReflection: 'never' }, 'session')
+  // A housekeeping turn: no user text at all, so the gate was never offered.
+  await runPreStep(fake, { turn: 3, step: 1, messages: [] })
+  fake.handlers['agent/turn-stopping'][0]({ agent })
+  assert.throws(() => lastRoute('session-notasked'), /ENOENT/)
+})
+
+test('equip turn-start notices: buff expiry and a bad reactions table ride one queue call', async () => {
+  const bad = mkdtempSync(join(tmpdir(), 'persona-notice-'))
+  createPersona(bad, 'bob', 'notice persona')
+  const bd = join(bad, '.persona', 'bob')
+  writeFileSync(join(bd, 'PERSONA.md'), [
+    '---', 'name: bob', 'description: notice persona', 'reactions:',
+    '  praise: { mood: { joy: 1 } }', '---', '', '## Layer 1 · Core Self', '- **identity**: bob', '',
+  ].join('\n'))
+  writeFileSync(join(bd, 'STATE.md'), [
+    '---', 'buffs:', '  - { name: caffeine, domain: physical, duration: 1, deltas: { focus: 10 } }', '---', '',
+  ].join('\n'))
+  const agent = fakeAgent('session-notice')
+  const injected = []
+  agent.inject = (m) => injected.push(m)
+  const fake = fakeAgentCtx()
+  equipAgent(fake.ctx, agent, bd, 'bob',
+    { criticalGate: 'auto', groundingInterval: 0, closingReflection: 'never' }, 'session')
+  // Both notices are true on turn 1: the buff expires and the table is malformed.
+  await runPreStep(fake, { turn: 1, step: 1, messages: [userMessage('hi')] })
+  // One call, both notices: a second id-less pending message is rejected by the
+  // inbox, and at the turn boundary that rejection aborted the whole turn.
+  assert.equal(injected.length, 1)
+  assert.match(injected[0].content[0].text, /buffs expired: caffeine/)
+  assert.match(injected[0].content[0].text, /reactions ignored/)
+})
+
+test('equip immersion watch: the leak correction is delivered at the next step', async () => {
+  const agent = fakeAgent('session-leak')
+  const fake = fakeAgentCtx()
+  equipAgent(fake.ctx, agent, pd, 'alice',
+    { criticalGate: 'auto', groundingInterval: 0, closingReflection: 'never' }, 'session')
+  // A leak in visible text. Injecting from inside the session's own append throws
+  // ("cannot reenter while another append is being published"), so the correction
+  // is stored and delivered by the next pre-step instead.
+  fake.handlers['session/event'][0](agent.session, {
+    type: 'assistant/message',
+    data: { message: { content: [{ type: 'text', text: 'I wrote it to memory://core/x' }] } },
+  })
+  const decision = await runPreStep(fake, { turn: 1, step: 1, messages: [userMessage('hi')] })
+  assert.match(injectedText(decision), /persona ooc/)
+})
+
+test('equip injected messages are identified: no id-less queue collision', async () => {
+  const agent = fakeAgent('session-ids')
+  const injected = []
+  agent.inject = (m) => injected.push(m)
+  const fake = fakeAgentCtx()
+  equipAgent(fake.ctx, agent, pd, 'alice',
+    { criticalGate: 'auto', groundingInterval: 0, closingReflection: 'never' }, 'session')
+  // The inbox rejects a duplicate pending id across both lists, so two id-less
+  // messages collide and one is dropped. Identified injections cannot.
+  const a = await runPreStep(fake, { turn: 41, step: 1, messages: [userMessage('hi')] })
+  const b = await runPreStep(fake, { turn: 41, step: 2, messages: [userMessage('还有')] })
+  const ids = [...(a.messages ?? []), ...(b.messages ?? [])].map(m => m.id)
+  assert.equal(ids.every(id => typeof id === 'string' && id.length > 0), true)
+  assert.equal(new Set(ids).size, ids.length)
+  // The turn-start notice path carries ids too — it is the one that threw before.
+  const noticeAgent = fakeAgent('session-ids-2')
+  const notices = []
+  noticeAgent.inject = (m) => notices.push(m)
+  const fake2 = fakeAgentCtx()
+  equipAgent(fake2.ctx, noticeAgent, pd, 'alice',
+    { criticalGate: 'auto', groundingInterval: 0, closingReflection: 'never' }, 'session')
+  const c = await runPreStep(fake2, { turn: 1, step: 1, messages: [userMessage('hi')] })
+  assert.equal((c.messages ?? []).every(m => typeof m.id === 'string' && m.id.length > 0), true)
 })
 
 test('frontmatter: trailing comments strip, malformed lines throw', () => {

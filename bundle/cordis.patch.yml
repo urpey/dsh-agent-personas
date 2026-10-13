@@ -6,6 +6,5 @@
         groundingInterval: 0
         closingReflection: 'one-shot'
         providerName: 'persona'
-        # auto: step-0 gate decides 1-segment vs 2-segment turns | always | never
+        # auto: you rule the verdict per turn | always: every turn critical | never: every turn routine
         criticalGate: 'auto'
-        criticalKeywords: []
