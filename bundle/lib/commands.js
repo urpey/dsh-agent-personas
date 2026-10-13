@@ -1,6 +1,6 @@
 /**
  * /persona slash commands: human entry points.
- *   list | new <name> [desc] | use <name> | off | spawn <name> [task] | status
+ *   list | new <name> [desc] | use <name> | off | spawn <name> [task] | compact <name> | status
  */
 import { randomUUID } from 'node:crypto'
 import { listPersonas, createPersona, personaExists, ensurePersona, personaDir } from './persona.js'
@@ -12,8 +12,8 @@ const PLUGIN = 'dsh-persona-system'
 export function registerCommands(ctx, cfg, resolveCwd, equipMap) {
   ctx.commands.register({
     name: 'persona',
-    description: 'Manage persistent personas: /persona list|new|use|off|spawn|status',
-    input: { hint: '<list|new|use|off|spawn|status> [args]' },
+    description: 'Manage persistent personas: /persona list|new|use|off|spawn|compact|status',
+    input: { hint: '<list|new|use|off|spawn|compact|status> [args]' },
     handler: async ({ agent, rawInput }) => {
       const [sub = '', ...rest] = rawInput.trim().split(/\s+/).filter(Boolean)
       const cwd = resolveCwd(agent)
@@ -71,6 +71,23 @@ export function registerCommands(ctx, cfg, resolveCwd, equipMap) {
           })
           return ok(`Spawned persona agent "${name}" (session ${id}, message ${messageId}).`)
         }
+        case 'compact': {
+          const [name] = rest
+          if (!name) return err('usage: /persona compact <name>')
+          if (!personaExists(cwd, name, cfg.libraryDir)) return err(`persona "${name}" not found`)
+          if (!ctx.subagents) return err('subagents service unavailable')
+          const { readPromptAsset } = await import('./persona.js')
+          const run = await ctx.subagents.start(cfg.providerName ?? 'persona', {
+            label: `persona:${name}:compact`,
+            prompt: [{ type: 'text', text: readPromptAsset('compact.md').trim() }],
+            parent: agent,
+            persona: personaRequestText(cwd, name, cfg.libraryDir),
+            signal: new AbortSignal(),
+          })
+          const result = await run.result
+          const text = (result.output ?? []).filter(b => b?.type === 'text').map(b => b.text).join('\n')
+          return ok(`compact ${name} (${result.stopReason}):\n${text || '(no report)'}`)
+        }
         case 'status': {
           const cur = equipMap.get(agent.id)
           const rows = listPersonas(cwd, cfg.libraryDir)
@@ -80,7 +97,7 @@ export function registerCommands(ctx, cfg, resolveCwd, equipMap) {
           ].join('\n'))
         }
         default:
-          return err(`unknown subcommand "${sub}". Try: list | new <name> | use <name> | off | spawn <name> [task] | status`)
+          return err(`unknown subcommand "${sub}". Try: list | new <name> | use <name> | off | spawn <name> [task] | compact <name> | status`)
       }
     },
   })

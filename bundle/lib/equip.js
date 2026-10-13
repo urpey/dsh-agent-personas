@@ -84,6 +84,9 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
   })
   // Compact catalog of every node: uri, priority, disclosure, triggers.
   // Lets the model `memory_read` on demand instead of holding all content.
+  // Capped at MAX_INDEX_LINES (sorted by priority) so a large library can't
+  // eat the context window — overflow stays reachable via memory_search.
+  const MAX_INDEX_LINES = 30
   section({
     name: 'persona:memory-index',
     order: 482,
@@ -91,11 +94,15 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
       try {
         const nodes = memory.listNodes(personaDir)
         if (!nodes.length) return ''
-        const lines = nodes.map(n => {
+        const sorted = [...nodes].sort((a, b) => (a.priority ?? 3) - (b.priority ?? 3))
+        const shown = sorted.slice(0, MAX_INDEX_LINES)
+        const lines = shown.map(n => {
           const t = Array.isArray(n.triggers) && n.triggers.length ? ` [triggers: ${n.triggers.join(', ')}]` : ''
           const d = n.disclosure ? ` — ${n.disclosure}` : ''
           return `- ${n.uri} (p${n.priority ?? 3}${n.aliasOf ? ` alias→${n.aliasOf}` : ''})${d}${t}`
         })
+        const hidden = sorted.length - shown.length
+        if (hidden > 0) lines.push(`… ${hidden} more nodes — use memory_search to reach them`)
         return `## Memory index\n${lines.join('\n')}`
       } catch { return '' }
     },
