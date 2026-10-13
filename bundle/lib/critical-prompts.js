@@ -257,9 +257,18 @@ The block never counts against the immersion boundary: numbers and mechanism wor
  * Stage-2 directive, returned as the inner_commit result. This is the second
  * generation of the turn: the monologue is already committed, and the job now
  * is the transform — same feeling, said out loud.
+ *
+ * The monologue text is embedded in the directive: request history strips
+ * synthetic reasoning blocks before the next generation, so without it the
+ * transform would have nothing to transform. It stays inside this tool result —
+ * the one channel tagged spans still reach the next step through.
  */
-export function stageTwoPrompt({ name }) {
+export function stageTwoPrompt({ name, monologue = '' }) {
   return `[persona stage 2 of 2] Inner monologue committed. Now transform it into your reply.
+${monologue ? `
+Your inner monologue — the reader cannot see it:
+${monologue}
+` : ''}
 
 Convert that monologue into what you actually say:
 - Layer 2 Voice rules are in force: tone, sentence shape, taboos, default length.

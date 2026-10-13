@@ -20,8 +20,15 @@ const pd = join(tmp, '.persona', 'alice')
 const userMessage = (text) => ({ role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } })
 
 /** Minimal live agent: equip only reaches for session, inject and followup. */
-const fakeAgent = (id = 'session-test') => ({
-  session: { header: { id } }, inject: () => {}, followup: () => {},
+const fakeAgent = (id = 'session-test', sessionExtra = {}) => ({
+  session: {
+    header: { id },
+    id,
+    deriveMessages: () => [],
+    snapshotEvents: () => [],
+    ...sessionExtra,
+  },
+  inject: () => {}, followup: () => {},
 })
 
 /**
@@ -305,6 +312,86 @@ test('equip missed verdict: a turn that never ruled is logged, not interrupted',
   assert.equal(line.verdict, 'missed')
   assert.equal(line.turn, 2)
   assert.equal(followed.length, 0)
+})
+
+test('equip stream hook: <thinking> in text becomes a reasoning block', async () => {
+  const agent = fakeAgent('session-tags')
+  const fake = fakeAgentCtx()
+  equipAgent(fake.ctx, agent, pd, 'alice',
+    { criticalGate: 'auto', groundingInterval: 0, closingReflection: 'never' }, 'session')
+  const listener = fake.handlers['llm/stream'][0]
+  assert.equal(typeof listener, 'function')
+  // An own-session stream is transformed.
+  const source = (async function* () {
+    yield { type: 'block-start', index: 0, blockType: 'text' }
+    yield { type: 'text-delta', index: 0, text: 'hi <thinking>inner</thinking> there' }
+    yield { type: 'block-end', index: 0, block: { type: 'text', text: 'hi <thinking>inner</thinking> there' } }
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  })()
+  const chunks = []
+  for await (const c of listener({ sessionId: 'session-tags' }, () => source)) chunks.push(c)
+  const ends = chunks.filter(c => c.type === 'block-end').map(c => c.block)
+  assert.deepEqual(ends.map(b => b.type), ['text', 'reasoning', 'text'])
+  assert.deepEqual(ends.map(b => b.text), ['hi', 'inner', 'there'])
+  // Another session's stream is not.
+  const foreign = (async function* () {
+    yield { type: 'text-delta', index: 0, text: 'raw <thinking>x</thinking>' }
+  })()
+  const other = []
+  for await (const c of listener({ sessionId: 'other-session' }, () => foreign)) other.push(c)
+  assert.deepEqual(other, [{ type: 'text-delta', index: 0, text: 'raw <thinking>x</thinking>' }])
+})
+
+test('equip deriveMessages wrap: monologue blocks never reach the request', async () => {
+  const logged = [
+    {
+      role: 'assistant',
+      content: [
+        { type: 'reasoning', text: 'tag monologue' },
+        { type: 'text', text: 'reply' },
+      ],
+      source: { kind: 'model', provider: 'p', model: 'm', replayState: { blocks: [{ type: 'reasoning' }, { type: 'text' }] } },
+    },
+  ]
+  const agent = fakeAgent('session-derive', { deriveMessages: () => logged })
+  const fake = fakeAgentCtx()
+  equipAgent(fake.ctx, agent, pd, 'alice',
+    { criticalGate: 'auto', groundingInterval: 0, closingReflection: 'never' }, 'session')
+  const derived = agent.session.deriveMessages()
+  assert.equal(derived.length, 1)
+  assert.deepEqual(derived[0].content, [{ type: 'text', text: 'reply' }])
+  assert.deepEqual(derived[0].source.replayState.blocks, [{ type: 'text' }])
+})
+
+test('inner_commit carries the monologue to stage 2 through the tool result', async () => {
+  const events = [
+    {
+      type: 'assistant/message',
+      data: {
+        message: {
+          content: [
+            { type: 'reasoning', text: '其实我有点生气' },
+            { type: 'tool-call', id: 'c1', name: 'inner_commit', arguments: '{}' },
+          ],
+        },
+      },
+    },
+  ]
+  const agent = fakeAgent('session-commit', { snapshotEvents: () => events })
+  const fake = fakeAgentCtx()
+  equipAgent(fake.ctx, agent, pd, 'alice',
+    { criticalGate: 'auto', groundingInterval: 0, closingReflection: 'never' }, 'session')
+  const result = await fake.tools.get('inner_commit').execute({}, { agent })
+  assert.match(result, /stage 2 of 2/)
+  assert.match(result, /其实我有点生气/)
+  assert.match(result, /reader cannot see it/)
+})
+
+test('stageTwoPrompt renders without a monologue (degraded)', async () => {
+  const s2 = criticalPrompts.stageTwoPrompt({ name: 'alice' })
+  assert.doesNotMatch(s2, /inner monologue — the reader/)
+  const withMono = criticalPrompts.stageTwoPrompt({ name: 'alice', monologue: 'felt hurt' })
+  assert.match(withMono, /felt hurt/)
 })
 
 test('equip turn-stopping: a critical turn pays stage 2 unless inner_commit ran', async () => {

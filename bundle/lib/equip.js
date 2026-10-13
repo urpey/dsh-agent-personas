@@ -15,6 +15,7 @@ import { splitFrontmatter } from './frontmatter.js'
 import { gateInstruction, signalsLine, stageOnePrompt, stageTwoPrompt, mergeReactions,
          GATE_ACK_CRITICAL, GATE_ACK_ROUTINE, REPLY_DIRECTIVE } from './critical-prompts.js'
 import { appendRoute } from './route-log.js'
+import { transformThinkingStream, stripThinkingFromMessages } from './thinking-tags.js'
 
 const PLUGIN = 'dsh-persona-system'
 const WRITE_TOOLS = new Set(['write', 'edit', 'multi_edit', 'bash'])
@@ -323,7 +324,7 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
   // A critical turn spends its first generation on the monologue alone, so the
   // deliberation cannot be skipped and the transform gets its own directive.
   T(jsonTool('inner_commit',
-    'Commit the inner monologue you just emitted in <thinking>…</thinking>. Call this immediately after the block on a critical turn — it ends stage 1 and hands you the stage-2 transform directive.',
+    'Commit the inner monologue you just emitted in <thinking>…</thinking>. Call this immediately after the block on a critical turn — it ends stage 1 and hands you the stage-2 transform directive with your monologue attached.',
     { type: 'object', properties: {}, additionalProperties: false },
     async (_a) => {
       // No `session.append('persona/stage', …)` here: `Session.append` cannot
@@ -332,7 +333,10 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
       // "durable binding fact" note below — same rule).
       // The monologue landed, so turn-stopping must not queue stage 2 again.
       awaitingMonologue = false
-      return stageTwoPrompt({ name })
+      // The transform carries its own source: history strips synthetic
+      // reasoning before the next request, so the monologue has to ride the
+      // tool result — this makes stage 2 self-contained rather than lucky.
+      return stageTwoPrompt({ name, monologue: lastMonologue() })
     }))
 
   // ---- persona_gate: the model's verdict, carried by a stub tool -------------
@@ -385,6 +389,58 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
   reg(agentCtx.on('agent/error', ({ turn, step, error }) => {
     agentCtx.logger?.warn?.(`[persona:${name}] turn ${turn} step ${step} error:`, error)
   }))
+
+  // ---- <thinking> extraction --------------------------------------------
+  // The protocol's inner monologue is written as literal <thinking>…</thinking>
+  // inside reply text. Two seams give it a real block type without touching
+  // the log: the stream transform splits tagged spans into reasoning blocks on
+  // the way out (UI folds them into the thinking row), and the deriveMessages
+  // wrapper strips synthetic reasoning + tag residue from request history so
+  // the monologue is never replayed to the provider — only the transform is
+  // replayed, never the tags. See lib/thinking-tags.js.
+  const equippedSessionId = agent?.session?.header?.id ?? agent?.session?.id
+  reg(agentCtx.on('llm/stream', (options, next) =>
+    options?.sessionId === equippedSessionId
+      ? transformThinkingStream(next())
+      : next()))
+  // Wrap once per session: a re-equip must not stack a second strip layer.
+  // Fake sessions in unit tests may not implement deriveMessages at all.
+  const session = agent?.session
+  if (session && typeof session.deriveMessages === 'function' && !session.__personaStripThinking) {
+    const derive = session.deriveMessages.bind(session)
+    session.deriveMessages = () => stripThinkingFromMessages(derive())
+    session.__personaStripThinking = true
+  }
+
+  /**
+   * The monologue this turn just produced, recovered from the session log.
+   * deriveMessages is wrapped, but snapshotEvents reads the raw log — the
+   * reasoning block is still there even though requests will never see it.
+   * Falls back to a literal-tag extract for logs written before the transform.
+   */
+  const lastMonologue = () => {
+    try {
+      const evs = session?.snapshotEvents?.() ?? []
+      for (let i = evs.length - 1; i >= 0; i--) {
+        if (evs[i]?.type !== 'assistant/message') continue
+        const blocks = evs[i]?.data?.message?.content ?? []
+        const reasoning = blocks
+          .filter(b => b?.type === 'reasoning')
+          .map(b => b.text ?? '')
+          .join('\n')
+          .trim()
+        if (reasoning) return reasoning
+        const literal = blocks
+          .filter(b => b?.type === 'text')
+          .map(b => b.text ?? '')
+          .join('\n')
+          .match(/<thinking>([\s\S]*?)(?:<\/thinking>|$)/)
+        if (literal?.[1]?.trim()) return literal[1].trim()
+        return ''
+      }
+    } catch { /* log unreadable — stage 2 renders without the monologue */ }
+    return ''
+  }
 
   // ---- turn lifecycle: buff tick + optional grounding + memory recall ----
   let lastTurn = -1
@@ -560,7 +616,7 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
     // wake the driver for a message the model owes itself.
     if (awaitingMonologue) {
       awaitingMonologue = false
-      try { agent.followup(userMsg(stageTwoPrompt({ name }))) } catch (e) {
+      try { agent.followup(userMsg(stageTwoPrompt({ name, monologue: lastMonologue() }))) } catch (e) {
         agentCtx.logger?.warn?.(`[persona:${name}] stage-2 recovery failed:`, e)
       }
       return
