@@ -1,7 +1,9 @@
 ---
 # Layer 0 · BASE — resource gauges (integer 0..max)
+# tick: optional per-turn drift — the body's own clock (negative drains, positive
+# recovers). Rendered as `energy 80/100 (-1/t)`. Omit for a static gauge.
 base:
-  energy: { max: 100, value: 80 }
+  energy: { max: 100, value: 80, tick: -1 }
   focus:  { max: 100, value: 60 }
 
 # Layer 1 · PALAM — session emotion accumulators (>=0, unbounded)

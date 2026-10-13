@@ -11,6 +11,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { splitFrontmatter, joinFrontmatter } from './frontmatter.js'
+import { renderReactions, REACTION_LAYERS } from './critical-prompts.js'
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 
@@ -43,6 +44,7 @@ function validateShape(d, file) {
       expectMap(path, e)
       if (e.value !== undefined && !isNum(e.value)) bad(`${path}.value`, 'must be a number')
       if (e.max !== undefined && !isNum(e.max)) bad(`${path}.max`, 'must be a number')
+      if (layer === 'base' && e.tick !== undefined && !isNum(e.tick)) bad(`${path}.tick`, 'must be a number')
       if (e.level !== undefined && !isNum(e.level)) bad(`${path}.level`, 'must be a number')
       if (e.requires !== undefined) {
         if (!isMap(e.requires)) bad(`${path}.requires`, 'must be a map of juel costs')
@@ -75,46 +77,104 @@ function save(state) {
 }
 
 /** Tool-call notice: the dump restores structure, never comments. */
-const commentNotice = st => st.droppedComments > 0
-  ? { notice: `${st.droppedComments} comment line(s) dropped on write — dump restores structure only; keep field meaning in Notes/PERSONA.md` }
-  : {}
+const commentNoticeText = st => st.droppedComments > 0
+  ? `${st.droppedComments} comment line(s) dropped on write — dump restores structure only; keep field meaning in Notes/PERSONA.md`
+  : null
+
+const noticeField = texts => {
+  const list = texts.filter(Boolean)
+  return list.length ? { notice: list.join(' | ') } : {}
+}
+
+const fmtDelta = v => (v > 0 ? `+${v}` : `${v}`)
+
+/**
+ * Advisory calibration — never rejects and never rewrites: compare what was
+ * applied with the event's reaction profile so drift shows up in the result the
+ * model already reads (same turn, no extra request).
+ */
+function calibrationNotices(event, applied, reactions) {
+  const out = []
+  const reported = new Set()
+  const profile = event ? reactions?.[event] : null
+  if (event && !profile) out.push(`event "${event}" has no reaction profile — delta applied uncalibrated`)
+  const mapped = profile
+    ? REACTION_LAYERS.flatMap(l => Object.keys(profile[l] ?? {}).map(f => `${l}.${f}`))
+    : []
+  for (const a of applied) {
+    if (a.dv === 0) continue
+    const path = `${a.layer}.${a.key}`
+    const mult = profile?.[a.layer]?.[a.key]
+    if (profile && mult === undefined) {
+      out.push(`event "${event}" maps to ${mapped.join('/') || '(nothing)'}; ${path} received ${fmtDelta(a.dv)} — intended?`)
+      reported.add(path)
+      continue
+    }
+    if (mult !== undefined) {
+      const expected = Math.round(15 * mult)
+      if (Math.abs(a.dv) > Math.max(30, expected * 2)) {
+        out.push(`${path} ${fmtDelta(a.dv)} exceeds the "${event}" band (×${mult} → ≈±${expected})`)
+        reported.add(path)
+      }
+    }
+    // The global ceiling speaks only for fields the profile did not already
+    // account for — one field must never produce two notices.
+    if (!reported.has(path) && Math.abs(a.dv) > 50) {
+      out.push(`${path} ${fmtDelta(a.dv)} exceeds the severe band (±50)`)
+      reported.add(path)
+    }
+  }
+  return out.slice(0, 3)
+}
 
 const num = v => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
 
 // ---------------------------------------------------------------- delta ----
 
 /** Apply integer deltas. Only base/palam/relations keys are writable. */
-export function applyDelta(personaDir, { base = {}, palam = {}, relations = {} }) {
+export function applyDelta(personaDir, { base = {}, palam = {}, relations = {}, event }, opts = {}) {
+  const { reactions = {} } = opts
   const st = loadState(personaDir)
   const d = st.data
   const changed = []
+  const applied = []
   for (const [k, dv] of Object.entries(base)) {
     const f = d.base?.[k]
     if (!f) throw new Error(`unknown base field "${k}"`)
     const before = num(f.value)
-    const after = clamp(before + Math.trunc(num(dv)), 0, num(f.max ?? 100))
+    const step = Math.trunc(num(dv))
+    const after = clamp(before + step, 0, num(f.max ?? 100))
     f.value = after
-    changed.push({ layer: 'base', key: k, before, after, clamped: after !== before + Math.trunc(num(dv)) })
+    changed.push({ layer: 'base', key: k, before, after, clamped: after !== before + step })
+    applied.push({ layer: 'base', key: k, dv: step })
   }
   for (const [k, dv] of Object.entries(palam)) {
     const f = d.palam?.[k]
     if (!f) throw new Error(`unknown palam field "${k}"`)
     const before = num(f.value)
-    const after = Math.max(0, before + Math.trunc(num(dv)))
+    const step = Math.trunc(num(dv))
+    const after = Math.max(0, before + step)
     f.value = after
-    changed.push({ layer: 'palam', key: k, before, after, clamped: after !== before + Math.trunc(num(dv)) })
+    changed.push({ layer: 'palam', key: k, before, after, clamped: after !== before + step })
+    applied.push({ layer: 'palam', key: k, dv: step })
   }
   for (const [k, dv] of Object.entries(relations)) {
     d.relations ??= {}
     d.relations[k] ??= { value: 0 }
     const f = d.relations[k]
     const before = num(f.value)
-    const after = clamp(before + Math.trunc(num(dv)), -100, 100)
+    const step = Math.trunc(num(dv))
+    const after = clamp(before + step, -100, 100)
     f.value = after
-    changed.push({ layer: 'relations', key: k, before, after, clamped: after !== before + Math.trunc(num(dv)) })
+    changed.push({ layer: 'relations', key: k, before, after, clamped: after !== before + step })
+    applied.push({ layer: 'relations', key: k, dv: step })
   }
   save(st)
-  return { changed, effective: renderStateSummary(st.data), ...commentNotice(st) }
+  return {
+    changed,
+    effective: renderStateSummary(st.data, { reactions }),
+    ...noticeField([...calibrationNotices(event, applied, reactions), commentNoticeText(st)]),
+  }
 }
 
 // ---------------------------------------------------------------- buffs ----
@@ -129,7 +189,7 @@ export function applyBuff(personaDir, { name, domain = 'misc', duration = null, 
   if (i >= 0) d.buffs[i] = buff  // refresh, not stack
   else d.buffs.push(buff)
   save(st)
-  return { buff, refreshed: i >= 0, ...commentNotice(st) }
+  return { buff, refreshed: i >= 0, ...noticeField([commentNoticeText(st)]) }
 }
 
 export function clearBuffs(personaDir, { name, domain } = {}) {
@@ -140,7 +200,7 @@ export function clearBuffs(personaDir, { name, domain } = {}) {
   else d.buffs = (d.buffs ?? []).filter(b =>
     name !== undefined ? b.name !== name : b.domain !== domain)
   save(st)
-  return { removed: before - d.buffs.length, ...commentNotice(st) }
+  return { removed: before - d.buffs.length, ...noticeField([commentNoticeText(st)]) }
 }
 
 /** Decrement turn-based buff durations; returns expired names. Called per turn. */
@@ -158,6 +218,29 @@ export function tickBuffs(personaDir) {
   const changed = expired.length || keep.some((b, i) => b.duration !== (d.buffs ?? [])[i]?.duration)
   if (changed) { d.buffs = keep; save(st) }
   return expired
+}
+
+/**
+ * Apply each base field's per-turn tick — the body's own clock. Only saves when
+ * something actually moved, so an idle turn never rewrites the file (and never
+ * drops its comments). Returns the applied drifts.
+ */
+export function tickBase(personaDir) {
+  const st = loadState(personaDir)
+  const d = st.data
+  const drifts = []
+  for (const [k, f] of Object.entries(d.base ?? {})) {
+    const tick = Math.trunc(num(f.tick))
+    if (!tick) continue
+    const before = num(f.value)
+    const after = clamp(before + tick, 0, num(f.max ?? 100))
+    if (after !== before) {
+      f.value = after
+      drifts.push({ key: k, before, after, tick })
+    }
+  }
+  if (drifts.length) save(st)
+  return drifts
 }
 
 // ---------------------------------------------------------------- settle ---
@@ -201,7 +284,7 @@ export function settle(personaDir) {
     }
   }
   save(st)
-  return { palamDelta, juelGained, levelUps, juel: d.juel, ...commentNotice(st) }
+  return { palamDelta, juelGained, levelUps, juel: d.juel, ...noticeField([commentNoticeText(st)]) }
 }
 
 /** Append free text to the STATE.md body (the only writable prose field). */
@@ -209,7 +292,7 @@ export function appendNote(personaDir, text) {
   const st = loadState(personaDir)
   st.body = st.body.replace(/\s*$/, '') + '\n' + text + '\n'
   save(st)
-  return { appended: true, ...commentNotice(st) }
+  return { appended: true, ...noticeField([commentNoticeText(st)]) }
 }
 
 // ---------------------------------------------------------------- render ---
@@ -224,11 +307,16 @@ export function effectiveValue(d, layer, key) {
   return { base, bonus, effective: clamp(base + bonus, 0, max) }
 }
 
-export function renderStateSummary(data) {
+export function renderStateSummary(data, { reactions = {} } = {}) {
   const lines = []
   for (const [k, f] of Object.entries(data.base ?? {})) {
     const { base, bonus, effective } = effectiveValue(data, 'base', k)
-    lines.push(`${k}: ${effective}/${f.max ?? 100}` + (bonus ? ` (${base}${bonus >= 0 ? '+' : ''}${bonus})` : ''))
+    const tick = Math.trunc(num(f.tick))
+    const parts = [
+      bonus ? `${base}${bonus >= 0 ? '+' : ''}${bonus}` : '',
+      tick ? `${tick > 0 ? '+' : ''}${tick}/t` : '',
+    ].filter(Boolean)
+    lines.push(`${k}: ${effective}/${f.max ?? 100}` + (parts.length ? ` (${parts.join(', ')})` : ''))
   }
   const palam = Object.entries(data.palam ?? {}).map(([k, f]) => `${k} ${num(f.value)}`).join(' · ')
   if (palam) lines.push(`palam: ${palam}`)
@@ -243,5 +331,6 @@ export function renderStateSummary(data) {
   const buffs = (data.buffs ?? []).map(b =>
     `${b.name} (${b.domain}${b.duration === null || b.duration === undefined ? '' : `, ${b.duration}t`}): ${Object.entries(b.deltas ?? {}).map(([k, v]) => `${k}${v >= 0 ? '+' : ''}${v}`).join(' ')}`)
   if (buffs.length) lines.push(`buffs: ${buffs.join(' | ')}`)
+  if (Object.keys(reactions).length) lines.push(`reactions: ${renderReactions(reactions)}`)
   return lines.join('\n')
 }

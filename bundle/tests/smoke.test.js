@@ -8,6 +8,7 @@ import { createPersona, renderPersonaPrefix, renderPersonaBody, stripPersonaText
 import { readBinding, writeBinding, clearBinding } from '../lib/bindings.js'
 import * as mem from '../lib/memory-store.js'
 import * as st from '../lib/state-store.js'
+import * as criticalPrompts from '../lib/critical-prompts.js'
 
 const tmp = mkdtempSync(join(tmpdir(), 'persona-'))
 const dir = createPersona(tmp, 'alice', 'test persona')
@@ -207,6 +208,110 @@ test('state shape: scalar-corrupted layer entries fail fast at load', () => {
     writeFileSync(join(dir, 'STATE.md'), `---\n${yaml}---\n`)
     assert.throws(() => st.loadState(dir), re, label)
   }
+})
+
+test('reactions: MBTI defaults compound, declared overrides, render caps', () => {
+  const { mergeReactions, renderReactions, assertReactions } = criticalPrompts
+  // Opt-in: no MBTI and no declaration means no profile at all.
+  assert.deepEqual(mergeReactions('', {}), {})
+  // Letters contribute field + multiplier; two letters on one field compound.
+  const infp = mergeReactions('INFP', {})
+  assert.equal(infp.praise.palam.joy, 1.2 * 1.1 * 1.5)           // I × N × F
+  assert.equal(infp.criticism.palam.shame, 1.3 * 1.1 * 1.6)
+  assert.equal(infp.praise.relations.user, 1.2)                   // F only
+  // A declared event layer replaces the merged one wholesale.
+  const declared = mergeReactions('INFP', { praise: { palam: { gluttony: 2 } } })
+  assert.equal(declared.praise.palam.gluttony, 2)
+  assert.equal(declared.praise.palam.joy, undefined)              // replaced, not merged
+  assert.equal(declared.criticism.palam.shame, 1.3 * 1.1 * 1.6)   // other events survive
+  // Malformed declarations throw with the offending path.
+  assert.throws(() => assertReactions({ praise: { mood: { joy: 1 } } }), /not a writable layer/)
+  assert.throws(() => assertReactions({ praise: { palam: { joy: 0 } } }), /positive number/)
+  assert.throws(() => assertReactions({ praise: [] }), /map of layer/)
+  // Render is one line, rounds float artifacts, and caps the event count.
+  assert.match(renderReactions(infp), /criticism→shame×2\.29,anger×0\.7/)
+  const many = Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`e${i}`, { palam: { joy: 1 } }]))
+  assert.match(renderReactions(many), /…\+3 more/)
+  assert.equal(renderReactions({}), '')
+  // The documented authoring shape must survive the real parser: a nested flow
+  // map under `reactions:` is where the earlier stringification bug lived.
+  const { data: authored } = splitFrontmatter([
+    '---', 'mbti: INFP', 'reactions:',
+    '  praise: { palam: { joy: 1.5 }, base: { satiety: 0.3 } }',
+    '  criticism: { palam: { shame: 1.8 } }', '---', '',
+  ].join('\n'))
+  const fromFile = mergeReactions(authored.mbti, authored.reactions)
+  assert.equal(fromFile.praise.palam.joy, 1.5)                    // declared layer wins
+  assert.equal(fromFile.praise.relations.user, 1.2)               // untouched layer keeps F
+  assert.equal(fromFile.criticism.palam.shame, 1.8)
+})
+
+test('base tick: per-turn drift, clamped, no write when idle', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'persona-tick-'))
+  writeFileSync(join(dir, 'STATE.md'), [
+    '---',
+    'base:',
+    '  energy:  { max: 100, value: 3, tick: -2 }',
+    '  focus:   { max: 100, value: 50 }',
+    '  satiety: { max: 100, value: 99, tick: 5 }',
+    '---',
+    '',
+  ].join('\n'))
+  // One turn: drains, clamps at max, leaves unticked fields alone.
+  assert.deepEqual(st.tickBase(dir).map(d => [d.key, d.after]), [['energy', 1], ['satiety', 100]])
+  st.tickBase(dir)
+  assert.equal(st.loadState(dir).data.base.energy.value, 0)     // floor at 0
+  assert.equal(st.loadState(dir).data.base.satiety.value, 100)  // ceiling at max
+  assert.equal(st.loadState(dir).data.base.focus.value, 50)
+  // A turn that drifts nothing must not rewrite the file.
+  const before = readFileSync(join(dir, 'STATE.md'), 'utf8')
+  assert.deepEqual(st.tickBase(dir), [])
+  assert.equal(readFileSync(join(dir, 'STATE.md'), 'utf8'), before)
+  // A non-numeric tick fails at load, not mid-write.
+  writeFileSync(join(dir, 'STATE.md'), '---\nbase:\n  energy: { max: 100, value: 3, tick: fast }\n---\n')
+  assert.throws(() => st.loadState(dir), /base\.energy\.tick must be a number/)
+})
+
+test('render: tick suffix only when set', () => {
+  const data = { base: { energy: { max: 100, value: 40, tick: -1 }, focus: { max: 100, value: 50 } } }
+  const line = st.renderStateSummary(data)
+  assert.match(line, /energy: 40\/100 \(-1\/t\)/)
+  assert.match(line, /focus: 50\/100/)
+  assert.doesNotMatch(line, /focus: 50\/100 \(/)
+})
+
+test('state_delta event calibration: silent in band, noticed when adrift', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'persona-cal-'))
+  writeFileSync(join(dir, 'STATE.md'), [
+    '---',
+    'palam:',
+    '  joy: { emit: favor, per: 100, decay: 20, value: 0 }',
+    '  shame: { emit: shame, per: 50, decay: 10, value: 0 }',
+    'relations:',
+    '  user: { value: 0 }',
+    '---',
+    '',
+  ].join('\n'))
+  const reactions = { praise: { palam: { joy: 1.5 }, relations: { user: 1.2 } } }
+  // In band for the profile (×1.5 → limit 46) → silent.
+  const ok = st.applyDelta(dir, { event: 'praise', palam: { joy: 15 }, relations: { user: 2 } }, { reactions })
+  assert.equal(ok.notice, undefined)
+  assert.equal(st.applyDelta(dir, { event: 'praise', palam: { joy: 40 } }, { reactions }).notice, undefined)
+  // Field the event does not map to → noticed as a question, still applied.
+  const wrong = st.applyDelta(dir, { event: 'praise', palam: { shame: 10 } }, { reactions })
+  assert.match(wrong.notice, /"praise" maps to palam\.joy\/relations\.user; palam\.shame received \+10/)
+  assert.equal(st.loadState(dir).data.palam.shame.value, 10)
+  // Beyond the profile band → noticed once, never twice for one field.
+  const loud = st.applyDelta(dir, { event: 'praise', palam: { joy: 80 } }, { reactions })
+  assert.match(loud.notice, /palam\.joy \+80 exceeds the "praise" band \(×1\.5 → ≈±23\)/)
+  assert.doesNotMatch(loud.notice, /severe band/)
+  // Unknown event name → noticed, delta still applied.
+  assert.match(st.applyDelta(dir, { event: 'nonsense', palam: { joy: 1 } }, { reactions }).notice, /no reaction profile/)
+  // No event → only the global severe band speaks.
+  assert.equal(st.applyDelta(dir, { palam: { joy: 10 } }, { reactions }).notice, undefined)
+  assert.match(st.applyDelta(dir, { palam: { joy: 60 } }, { reactions }).notice, /exceeds the severe band/)
+  // The profile rides the rendered summary.
+  assert.match(st.renderStateSummary(st.loadState(dir).data, { reactions }), /reactions: praise→joy×1\.5,user×1\.2/)
 })
 
 test('settle: decay is % of remainder kept — never grows palam', () => {

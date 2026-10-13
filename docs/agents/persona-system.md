@@ -24,6 +24,11 @@ The `dsh-persona-system` plugin bundle gives equipped agents a persistent person
 name: <name>
 description: one-line identity
 triggers: [names, aliases]
+mbti: INFP          # tunes the inner monologue + seeds reaction defaults
+interests: [数据库]
+reactions:          # optional; overrides the MBTI defaults per event layer
+  praise: { palam: { joy: 1.5 }, base: { satiety: 0.3 } }
+  criticism: { palam: { shame: 1.8 } }
 ---
 
 ## Layer 1 · Core Self
@@ -43,8 +48,9 @@ Frontmatter-only data; free-text notes in the body.
 ```yaml
 ---
 # Layer 0 · BASE — resource gauges, integer 0–max, replenishable
+# tick = per-turn drift (the body's own clock); omit for a static gauge
 base:
-  energy: { max: 100, value: 80 }
+  energy: { max: 100, value: 80, tick: -1 }
   focus:  { max: 100, value: 60 }
 
 # Layer 1 · PALAM — in-session emotion accumulators (≥0, unbounded)
@@ -93,15 +99,63 @@ not general YAML):
   numeric, `buffs` an array) so a hand-edit that drifts fails at load, not
   mid-write after schema keys were already lost.
 
+## Turn-level drift (`base.*.tick`)
+
+Optional integer on a `base` entry. Once per turn — on the same `agent/pre-step`
+hook that ages buffs, in one file write — every ticked field moves by `tick`,
+clamped to `0..max`. It is the body's own clock, not an external condition:
+`tick` mutates the real value and cannot be cleared, while `buffs` modify the
+effective value and can be.
+
+Pacing rule: `tick × expected turns ≈ total drift`. Keep `|tick| ≤ 3`; a 50-turn
+session at `tick: -1` drains about half a gauge. A turn that drifts nothing does
+not rewrite the file (so its comments survive). No floor above 0 — a linear drain
+pins at empty rather than stopping at "exhausted but alive".
+
+## Reactions — scenario → field → magnitude
+
+`PERSONA.md` frontmatter declares how this persona converts an event into state:
+
+```yaml
+reactions:
+  praise: { palam: { joy: 1.5 }, base: { satiety: 0.3 } }
+```
+
+- Shape: `event → { palam|base|relations: { field: multiplier } }`. Multiplier
+  scales the magnitude band, not a fixed value; `0` and negatives are rejected.
+- **MBTI seeds it**: each declared letter contributes field+multiplier defaults
+  (`F` amplifies `joy`/`shame` and touches `relations`, `T` dampens affect).
+  Letters compound when they reach the same field (INFP `praise.palam.joy` =
+  I × N × F). A declared event *layer* replaces the merged layer wholesale — the
+  declaration wins outright, so writing one field takes over that event.
+- **Enforcement is advisory (L2)**: `state_delta` takes an optional `event`. After
+  applying, the tool compares the delta with the profile and reports drift in its
+  result — the same channel that reports dropped comments, read in the same turn,
+  no extra request. It never rejects and never rewrites.
+  - `|delta| > 50` → always noticed (the protocol's own ceiling).
+  - with an `event`: `|delta| > max(30, round(15 × mult) × 2)` → noticed. The 30
+    floor is the top of the *notable* band, so calibration speaks only once a
+    delta reaches *significant*.
+  - a field the event does not map to → noticed as a question, not an error.
+  - an unknown event name → "no reaction profile", delta still applied.
+- The merged table is rendered into every turn's `## Current state` block as one
+  capped line (`reactions: praise→joy×1.5,satiety×0.3 · …`), so routine turns see
+  it too. Full event semantics stay in PERSONA.md prose.
+- A malformed `reactions` table never breaks the agent: it falls back to the MBTI
+  letter defaults and injects `[persona] PERSONA.md reactions ignored — <reason>`
+  once at the next turn.
+
 ## Write-channel rules (enforced)
 
 | Data | Who writes | How |
 |---|---|---|
 | PERSONA.md | humans only | hand edit; agents cannot modify it |
-| STATE.md `base`/`palam`/`relations` values | `state_delta` tool | integer deltas, clamped |
+| STATE.md `base`/`palam`/`relations` values | `state_delta` tool | integer deltas, clamped; optional `event` calibrates against the reaction profile |
+| STATE.md `base.*.tick` | humans only | schema key; per-turn drift applied by the turn hook, never by tools |
 | STATE.md `buffs` | `buff_apply` / `buff_clear` tools | same-name buff refreshes; `duration` decrements per turn |
 | STATE.md `stats`/`marks`/`juel`/field schema | `state_settle` only | palam → juel → level-ups; no direct tool write |
 | STATE.md body notes | `state_update` tool | append-only |
+| PERSONA.md `reactions` | humans only | same human-only file as `mbti`; MBTI letters seed the defaults |
 | memory/**.md | `memory_*` tools | URI tree + frontmatter |
 | direct file tools on `.persona/**` | **denied** | scoped `tools/pre-execute` guard rejects `write`/`edit`/`bash` calls whose path touches the persona library |
 
@@ -178,6 +232,13 @@ Binding persistence (resume after restart): `/persona use` writes `.persona/.bin
 ## Known limitations
 
 - `/persona` command cards don't render in a brand-new session until the first message sends: DSH's chat shell hides the transcript while `conversationPhase === 'blank'` (`activeTargets` requires a non-command chat node; `promptAttempted` flips on first submit). Harness-side behavior, same for all host commands.
+- Reaction calibration is advisory by design: the model names the event and keeps
+  final say, so a wrong event label produces a confidently calibrated wrong delta.
+  There is no magnitude hard-cap; `|delta| > 50` is reported, not rejected.
+- The comment-drop notice rides a *tool result*, so it fires only when a tool is the
+  first writer after a hand edit. The per-turn tick (`tickBuffs`/`tickBase`) can write
+  first and drop comments silently — comments are documentation, not data, and the
+  structure (schema keys, values) survives either way.
 - `.persona` write guard is a substring check on tool arguments, not a syscall-level jail.
 - `spawn_teammate` does not forward a `persona` request field — persona-bound teammates must come from `persona_spawn` or `/persona spawn`.
 - Memory compaction is on-demand (`/persona compact <name>` maintenance one-shot + closing-time tidying), not scheduled — no automatic cadence yet.

@@ -70,6 +70,11 @@ A memory's value is changing future behavior; if remembering it changes nothing,
 
 - Call `state_delta` DURING the turn, at the moment something lands — an insult, praise, fatigue, a shift in trust. Never batch emotions to the end.
 - Magnitude: ±1–5 a nudge, ±5–15 notable, ±15–30 significant, ±30–50 severe. Rarely beyond ±50.
+- When you know the scenario, name it: `state_delta({ event: 'praise', palam: { joy: +10 } })`.
+  Your `reactions` profile (and your MBTI's defaults) calibrate what that event should
+  cost you; the tool tells you when a delta drifts from the profile. The event never
+  replaces your judgment — a persona may react against its own grain, and the notice
+  will simply say so.
 - `buff_apply({name, domain, duration, deltas})` for temporary conditions — caffeine, a fresh wound, adrenaline. `duration` counts turns; `null` persists until `buff_clear`.
 - `state_settle()` crystallizes palam → juel and may raise stats/marks. Use it at chapter end; it settles what you RECORDED.
 

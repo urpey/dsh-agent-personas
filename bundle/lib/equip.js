@@ -12,7 +12,7 @@ import * as state from './state-store.js'
 import { renderStateSummary } from './state-store.js'
 import { splitFrontmatter } from './frontmatter.js'
 import { assessTurn } from './critical.js'
-import { modeNotice, stageTwoPrompt } from './critical-prompts.js'
+import { modeNotice, stageTwoPrompt, mergeReactions } from './critical-prompts.js'
 
 const PLUGIN = 'dsh-persona-system'
 const WRITE_TOOLS = new Set(['write', 'edit', 'multi_edit', 'bash'])
@@ -57,6 +57,18 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
     meta = splitFrontmatter(readFileSync(join(personaDir, 'PERSONA.md'), 'utf8')).data
   } catch { /* profile unreadable — gate falls back to interest-less */ }
 
+  // Reaction profile: MBTI letter defaults, refined by the persona's own table.
+  // A malformed table degrades to the letter defaults and is surfaced once at the
+  // first turn rather than breaking the agent at equip time.
+  let reactions = {}
+  let reactionsError = ''
+  try {
+    reactions = mergeReactions(meta.mbti ?? '', meta.reactions)
+  } catch (e) {
+    reactionsError = String(e?.message ?? e)
+    try { reactions = mergeReactions(meta.mbti ?? '', {}) } catch { reactions = {} }
+  }
+
   // ---- prompt sections -------------------------------------------------
   const sp = agentCtx.systemPrompt
   const section = (s) => reg(sp.section(s))
@@ -99,7 +111,7 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
     const parts = []
     try {
       const { data } = state.loadState(personaDir)
-      parts.push(`## Current state\n${renderStateSummary(data)}`)
+      parts.push(`## Current state\n${renderStateSummary(data, { reactions })}`)
     } catch { /* unreadable state — omit the block */ }
     try {
       const boot = memory.renderBoot(personaDir)
@@ -246,17 +258,18 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
 
   // ---- state tools -------------------------------------------------------
   T(jsonTool('state_delta',
-    'Apply integer deltas to state. Writable layers only: base (0..max), palam (>=0, crystallizes on settle), relations (-100..+100). Magnitude: ±1–5 nudge, ±5–15 notable, ±15–30 significant, ±30–50 severe.',
+    'Apply integer deltas to state. Writable layers only: base (0..max), palam (>=0, crystallizes on settle), relations (-100..+100). Magnitude: ±1–5 nudge, ±5–15 notable, ±15–30 significant, ±30–50 severe. Name the scenario with `event` (e.g. praise/insult/feeding) when you know it — it calibrates the delta against your reaction profile; it never replaces your judgment.',
     {
       type: 'object',
       properties: {
         base: { type: 'object', additionalProperties: { type: 'integer' } },
         palam: { type: 'object', additionalProperties: { type: 'integer' } },
         relations: { type: 'object', additionalProperties: { type: 'integer' } },
+        event: { type: 'string' },
       },
       additionalProperties: false,
     },
-    async (a) => state.applyDelta(personaDir, a)))
+    async (a) => state.applyDelta(personaDir, a, { reactions })))
   T(jsonTool('buff_apply',
     'Apply a named buff/debuff: temporary deltas over base/palam values. Same name refreshes instead of stacking. duration counts turns; null persists until buff_clear.',
     {
@@ -336,10 +349,19 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
   reg(agentCtx.on('agent/pre-step', async ({ turn, step }, next) => {
     if (turn !== lastTurn) {
       lastTurn = turn
+      // Turn-level body clock: buffs age, base fields drift — one write per turn.
       const expired = state.tickBuffs(personaDir)
+      state.tickBase(personaDir)
       if (expired.length) agent.inject?.(userMsg(`[persona] buffs expired: ${expired.join(', ')}`))
+      if (reactionsError) {
+        agent.inject?.(userMsg(`[persona] PERSONA.md reactions ignored — ${reactionsError}`))
+        reactionsError = ''
+      }
+      // The state block is stale by construction after a tick. This assignment
+      // used to sit after `lastTurn = turn`, so it never fired and a drifted
+      // body only reached the model once some mutator tool happened to run.
+      contextDirty = true
     }
-    if (turn !== lastTurn) contextDirty = true
     const decision = await next()
     if (decision.kind !== 'enter') return decision
     const extra = []
