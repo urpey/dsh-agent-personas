@@ -3,3 +3,4 @@ node_modules/
 .DS_Store
 .persona/.bindings/
 .persona/.routes/
+.scratch/
