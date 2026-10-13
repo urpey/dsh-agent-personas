@@ -158,7 +158,7 @@ reactions:
 | Data | Who writes | How |
 |---|---|---|
 | PERSONA.md | humans only | hand edit; agents cannot modify it |
-| STATE.md `base`/`palam`/`relations` values | `state_delta` tool | integer deltas, clamped; optional `event` calibrates against the reaction profile |
+| STATE.md `base`/`palam`/`relations` values | `state_delta` tool, or the `delta` field of the `persona_gate` call | integer deltas, clamped; optional `event` calibrates against the reaction profile |
 | STATE.md `base.*.tick` | humans only | schema key; per-turn drift applied by the turn hook, never by tools |
 | STATE.md `buffs` | `buff_apply` / `buff_clear` tools | same-name buff refreshes; `duration` decrements per turn |
 | STATE.md `stats`/`marks`/`juel`/field schema | `state_settle` only | palam → juel → level-ups; no direct tool write |
@@ -185,6 +185,54 @@ accumulator — the leftover only shrinks.
 
 Delta magnitude guidance lives in `bundle/prompts/protocol.md`: ±1–5 nudge, ±5–15 notable, ±15–30 significant, ±30–50 severe.
 
+## Reading the bands (how a number becomes behaviour)
+
+A number the model has no band for is a number it does not act on. Three surfaces
+carry the interpretation, all rendered from one owner (`relationStance` /
+`carriedJuel` in `bundle/lib/critical-prompts.js`):
+
+| Layer | Band | Rendered as |
+|---|---|---|
+| `base.*` | `value/max ≤ 0.3` | "`energy` is low (20/100) — thoughts run shorter, flatter, tireder" (stage-1 tuning) |
+| `base.*` | `value/max ≥ 0.8` | full — the ease that resource buys |
+| `palam.*` | `≥ 15` | "`anger` is running high (40) — it colors every thought this turn" (stage-1 tuning) |
+| `palam.*` | `≥ 30` | "`anger` = 40 — already hot" (gate signals) |
+| `relations.*` | `≤ −30` | `hostile — suspicion first` |
+| `relations.*` | `−29..−1` | `cold — cooling; no warmth volunteered` |
+| `relations.*` | `0..+29` | `unbonded — no standing yet — do not presume closeness` |
+| `relations.*` | `+30..+59` | `warm — ease and generosity by default` |
+| `relations.*` | `≥ +60` | `bonded — long trust — generosity is the reflex` |
+| `juel.*` | `≥ 20` | "carried (permanent, not this turn's mood): `grudge` = 60" |
+
+The stance band is **total**: every relation value lands in a band, so a relation
+at `0` speaks on all three surfaces. The old rule emitted a line only at
+`|v| ≥ 30`, which left `0` silent — and silence is not neutral, because the
+persona's own Layer-1 prose ("主人·几乎写死的高") then supplied the default and
+the persona stayed intimate at `relations.user = 0`. Where a persona's prose and
+its numbers disagree, the numbers win for the current turn; `protocol.md` states
+that priority explicitly and tells the model to rule such a divergence critical.
+
+### Voice precedence — who owns tone vs. truth
+
+`protocol.md`'s "Voice precedence" section fixes the reference order for a reply.
+**Tone** is sourced first from the persona's Layer 2 Voice as re-tuned by
+`## Current state` (numbers win conflicts with baseline prose, per the bands
+above). **Memory and conversation context** are the second reference for tone —
+they set *content truthfulness* (facts, history, what happened) and may shade the
+register, but never set or reverse it. Input changes how the persona sounds only
+through the state ledger (`delta`/`state_delta`), never by borrowing a remembered
+or implied mood. The same sentence rides `REPLY_DIRECTIVE`, `stageTwoPrompt`, the
+stage-1 `VOICE:` label, and `prompts/grounding.md` so every reply surface carries
+it — and `templates/PERSONA.md` anchors voice rules in Layer 2, not in memory
+nodes.
+
+`juel` is deliberately labelled permanent wherever it is rendered — in the state
+block (`juel (permanent, spent only on growth): grudge×60`) and in the gate
+signals. It is crystallized history, not a mood: a kept `grudge` outlives the
+`palam.anger` that produced it and is spent only by `state_settle` level-ups, so
+a large balance has to shape the baseline rather than the current temper. Before
+this, `juel` was rendered in the state block and read by no rule anywhere.
+
 ## Runtime mechanics (implemented)
 
 Prompt sections injected per equipped agent (agent-scoped, in assembly order):
@@ -193,7 +241,7 @@ Prompt sections injected per equipped agent (agent-scoped, in assembly order):
 |---|---|---|---|
 | `deployment:persona-prefix` | 0 | static | Persona body from PERSONA.md (frontmatter stripped). Skipped when the spawn provider already mounted it via `request.persona`. |
 | `harness:identity` | `HARNESS_IDENTITY` | static | Shadowed with `You are an AI agent.` so the harness opener cannot contradict the persona. |
-| `persona:protocol` | 483 | static | `prompts/protocol.md`: dual-process contract, state/memory/closing contracts. |
+| `persona:protocol` | 483 | static | `prompts/protocol.md`: dual-process contract, voice precedence, state/memory/closing contracts. |
 
 **The system prompt is deliberately static.** State, boot memory and the memory index live in an injected `[persona context — internal state, not user input]` message instead, appended at the END of the step input:
 
@@ -218,10 +266,10 @@ Turn hooks (`agent/pre-step`, `agent/turn-stopping`):
 
 Dual-process protocol (`prompts/protocol.md`): the gate is a verdict the model rules, and the turn gains a decision step to carry it.
 
-- **Step 1 — the instruction.** `gateInstruction()` injects `[persona gate]`: the imperative, the forced-mode sentence when `criticalGate` is `always`/`never`, and a `## Signals` block of deterministic facts only — speaker known (with relation values) or first contact, declared `interests`, palam fields at or above 30, active buffs, and the input truncated to 160 chars. It is the last thing in the step input, after the persona context block. The same signals string is what the route log records.
-- **The verdict.** The model's only output on that step is `persona_gate({ critical, reason? })`. The tool holds no criteria and makes no judgment: it records the verdict and returns a one-line acknowledgement. `reason` is the model's own words for why the turn is loaded, quoted into the stage-1 directive.
+- **Step 1 — the instruction.** `gateInstruction()` injects `[persona gate]`: the imperative, the forced-mode sentence when `criticalGate` is `always`/`never`, the ledger sentence for `delta`, and a `## Signals` block — speaker known (with relation values) or first contact, one stance line per relation, declared `interests`, palam fields at or above 30, carried `juel` at or above 20, active buffs, and the input truncated to 160 chars. It is the last thing in the step input, after the persona context block. The same signals string is what the route log records.
+- **The verdict.** The model's only output on that step is `persona_gate({ critical, reason?, delta? })`. The tool holds no criteria and makes no judgment: it records the verdict and returns a one-line acknowledgement. `reason` is the model's own words for why the turn is loaded, quoted into the stage-1 directive. `delta` is the turn's ledger entry — applied through the same `applyDelta` channel as `state_delta` (calibration notice and all, appended to the acknowledgement), applied *before* the state is loaded for the directive so the monologue's pressure lines already include what just landed, and recorded in the route log as the `changed` list. A delta that names no field is not an entry (`hasDeltaFields`), so an empty object can never rewrite STATE.md to record nothing; a malformed one degrades to a `delta not applied — <reason>` notice instead of taking the verdict down with it.
 - **Step 2 — the directive.** The directive the verdict owes is injected once, at the next step: `REPLY_DIRECTIVE` (`[persona reply]`) for routine, or `stageOnePrompt()` (`[persona stage 1 of 2]`) for critical. The critical path keeps the staged shape: step 2 emits only the `<thinking>…</thinking>` monologue (`STATE:` verbatim copy from the context block, `TRIGGERS:`, `REFUSAL:`, `VOICE:`, then free expansion) and calls `inner_commit`; the tool returns the stage-2 transform directive, and step 3 produces the reply. Staging is structural: the monologue cannot be skipped, and the transform gets its own directive. The monologue text itself rides the `inner_commit` result — request history strips synthetic reasoning before the next step, so without it the transform would have nothing to transform (see "thinking extraction" below).
-- **Cost.** Routine 2 requests (gate step + reply), critical 3 (gate step, monologue step, reply step) — one more than before in both shapes. The gate step is small: its output is the call, ~15 tokens.
+- **Cost.** Routine 2 requests (gate step + reply), critical 3 (gate step, monologue step, reply step) — one more than before in both shapes. The gate step is small: its output is the call, ~15 tokens. The ledger rides the call, so per-turn state recording costs no request at all.
 
 Degradation: a gate step that produced no call is re-asked once, at a later step of the same turn that carries new user input (`step <= 2`); after that the turn proceeds and the route log records `verdict: 'missed'` — a turn that was never offered the gate is not logged as a miss. A critical verdict whose `inner_commit` never arrived gets the stage-2 directive queued by `agent/turn-stopping` as a followup turn, so the reader never receives a bare monologue. A directive still pending when the turn stops is queued once on the step inbox (`agent.inject`), not as a followup: a non-empty next-step queue is itself what makes the loop re-enter, and the inbox rejects a second pending id-less message — so an inject+followup pair would either throw or deliver the directive twice. State deltas are recorded at the moment they happen, not batched.
 
@@ -243,13 +291,22 @@ Config (`cordis.patch.yml` row `persona-system`, user patch can override):
 | `providerName` | `persona` | `ctx.subagents` provider name |
 | `criticalGate` | `auto` | `auto` (the model rules each turn via `persona_gate`) / `always` (every turn critical) / `never` (every turn routine) |
 
-Binding persistence (resume after restart): `/persona use` writes `.persona/.bindings/<sessionId>.json`; on the next `agent/created` the plugin reads it back and re-equips as `mode: 'session'`. **Do not reintroduce a `persona/bound` session event** — live `Session.append` cannot mark an event `ignorable: true`, so an out-of-tree event type persists as a required unknown and `validateStoredEvents` refuses to restore the whole session (session becomes unopenable). Spawned children don't need the ledger: their `subagent/descriptor` carries the `persona-profile:` marker.
+Binding persistence (resume after restart): `.persona/.bindings/<sessionId>.json` is the **single durable owner** of "which persona is this session equipped with". Two writers, one row each: `/persona use` registers the session it equipped, and every spawn path (`/persona spawn`, `/persona compact`, the `persona_spawn` tool in both modes) registers the child session it created — the child is equipped by construction, so it must be registered too. On the next `agent/created` the plugin reads the row back and re-equips as `mode: 'session'`, and the `/personas` picker reads the same row to badge the equipped persona. **Do not reintroduce a `persona/bound` session event** — live `Session.append` cannot mark an event `ignorable: true`, so an out-of-tree event type persists as a required unknown and `validateStoredEvents` refuses to restore the whole session (session becomes unopenable). **Do not add a second binding channel either**: continuable spawns pass persona BODY text (`lib/provider.js` `personaBodyText`), so a `subagent/descriptor` carries no `persona-profile:` marker to parse — the descriptor-replay branch that used to read one was unreachable dead code and was removed.
 
-Route log (gate audit): every verdict appends one JSON line to `.persona/.routes/<sessionId>.jsonl` — `{ at, turn, step, verdict, reason, signals }`, where `at` is ISO-8601 and `verdict` is `critical | routine | missed` (`missed` = the turn ended with no verdict). `signals` is the rendered signal block the model ruled against, so a ruling can be reviewed after the fact. Appends are best-effort: an unwritable log never breaks a turn. **Do not turn it into a session event** — the same `ignorable` hazard as `.persona/.bindings/` above applies verbatim.
+Route log (gate audit): every verdict appends one JSON line to `.persona/.routes/<sessionId>.jsonl` — `{ at, turn, step, verdict, reason, signals }`, plus `delta` (the applied `changed` list) when the verdict carried a ledger entry. `at` is ISO-8601 and `verdict` is `critical | routine | missed | no-delta` (`missed` = the turn ended with no verdict; `no-delta` = the turn was ruled but wrote no ledger entry, neither a gate `delta` nor a `state_delta` call). `signals` is the rendered signal block the model ruled against, so a ruling can be reviewed after the fact. The `no-delta` verdict exists because "state is not updated every turn" used to be invisible: it is a count in the log now, and it never interrupts the turn. Appends are best-effort: an unwritable log never breaks a turn. **Do not turn it into a session event** — the same `ignorable` hazard as `.persona/.bindings/` above applies verbatim.
+
+## Host/client pitfalls (both shipped as real bugs once)
+
+- **A `remote.<namespace>` service key is FLAT.** The client half reads the workspace-files API as `ctx.remote.workspaceFiles`, so `inject` must name that exact string — `'remote.workspaceFiles'`. Injecting `'remote'` and reading `.workspaceFiles` off it throws `cannot get property "workspaceFiles" without inject`, and a client that swallows that error ships a popup reading 0 personas while the library is full. `bundle/tests/picker.test.js` mounts the real `client.js` against a stub service table that throws on an unknown key precisely so this cannot regress silently.
+- **Never `new AbortSignal()`.** `AbortSignal` is an interface, not a constructible class: `new AbortSignal()` is a `TypeError: Illegal constructor`. Every subagent entry point calls `signal.throwIfAborted()`, so the failure surfaces as `command/done { kind: "error", text: "Illegal constructor" }` on 派生/压缩. Use `new AbortController().signal` (the `NEVER_ABORTS` constant in `bundle/lib/commands.js` / `bundle/index.js` is that shape).
+- **The picker's badge is the binding ledger, read through `workspaceFiles.read`.** There is no dot-path filtering in that remote (it resolves any relative path under the session cwd), which is why `.persona/.bindings/<sessionId>.json` is readable from the client at all — but it is also why a session with no ledger row is invisible no matter how real its equip is. Equip and registration are one act: see the binding paragraph above.
+- **The equip state lives ON the agent (`agent.personaEquip`), never in a module-level table.** A `const equipped = new Map()` at module scope used to be the authority for `/persona use|off|status`: the agent survives an HMR reload of this bundle but the module — and the map — does not, so the reloaded commands read an empty table and lied (`use` re-equipped an already-equipped scope and crashed on a duplicated `persona:protocol` section; `off` reported "no persona equipped" while the equip was live). `agent.id === session.id` is a registry invariant, so the agent object is exactly the session's place to carry `{ name, dispose }`; it dies with the agent, which is the session's lifetime. The `agent/created` listener's first line `if (agent.personaEquip) return` doubles as the idempotency guard for duplicate announcements. **Do not reintroduce any process-scoped equip bookkeeping** — commands/tests must read the agent.
 
 ## Known limitations
 
 - The gate is model judgment with no deterministic floor: a loaded turn ruled routine is visible only in the route log, after the fact.
+- Per-turn state recording is *carried*, not *enforced*: the gate call is the one output the turn structure forces, and `delta` rides it, but the model can still omit it. Omission is a real answer (a turn that moved nothing) and is logged as `verdict: 'no-delta'` — count it in `.persona/.routes/` rather than expecting a guarantee. A model that omits every turn is a prompt/calibration problem the log now makes visible; code never fabricates a delta.
+- The stance bands and the carried-`juel` threshold are code-owned and identical for every persona (`bundle/lib/critical-prompts.js`). Per-persona band text was deliberately left out of the STATE.md schema, so a persona that wants different wording for its own relations edits prose, not bands. If per-persona bands become necessary, extend the schema — do not add a second band table beside `RELATION_BANDS`.
 - `/persona` command cards don't render in a brand-new session until the first message sends: DSH's chat shell hides the transcript while `conversationPhase === 'blank'` (`activeTargets` requires a non-command chat node; `promptAttempted` flips on first submit). Harness-side behavior, same for all host commands.
 - Reaction calibration is advisory by design: the model names the event and keeps
   final say, so a wrong event label produces a confidently calibrated wrong delta.
