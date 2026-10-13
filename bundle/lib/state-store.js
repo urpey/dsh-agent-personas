@@ -17,13 +17,67 @@ const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 export function loadState(personaDir) {
   const file = join(personaDir, 'STATE.md')
   if (!existsSync(file)) throw new Error(`STATE.md missing under ${personaDir}`)
-  const { data, body } = splitFrontmatter(readFileSync(file, 'utf8'))
-  return { file, data, body }
+  const { data, body, droppedComments } = splitFrontmatter(readFileSync(file, 'utf8'))
+  validateShape(data, file)
+  return { file, data, body, droppedComments }
+}
+
+/**
+ * Shape invariants for the numeric layers. Checked at load so a hand-edited
+ * STATE.md that drifted out of grammar fails loudly HERE — before any
+ * mutation — instead of inside applyDelta (cryptic TypeError) or, worse,
+ * after a write-back that already dropped emit/per/decay/max/requires.
+ */
+function validateShape(d, file) {
+  const bad = (path, msg) => { throw new Error(`${file}: ${path} ${msg}`) }
+  const isMap = v => v && typeof v === 'object' && !Array.isArray(v)
+  const isNum = v => typeof v === 'number' && Number.isFinite(v)
+  const expectMap = (path, v) => {
+    if (!isMap(v)) bad(path, `must be a map like { value: 0 }, got ${typeof v === 'object' && v !== null ? 'array' : JSON.stringify(v)?.slice(0, 80)}`)
+  }
+  for (const layer of ['base', 'palam', 'stats', 'marks', 'relations']) {
+    if (d[layer] === undefined || d[layer] === null) continue
+    if (!isMap(d[layer])) bad(layer, 'must be a map of field entries')
+    for (const [k, e] of Object.entries(d[layer])) {
+      const path = `${layer}.${k}`
+      expectMap(path, e)
+      if (e.value !== undefined && !isNum(e.value)) bad(`${path}.value`, 'must be a number')
+      if (e.max !== undefined && !isNum(e.max)) bad(`${path}.max`, 'must be a number')
+      if (e.level !== undefined && !isNum(e.level)) bad(`${path}.level`, 'must be a number')
+      if (e.requires !== undefined) {
+        if (!isMap(e.requires)) bad(`${path}.requires`, 'must be a map of juel costs')
+        for (const [j, c] of Object.entries(e.requires))
+          if (!isNum(c)) bad(`${path}.requires.${j}`, 'must be a number')
+      }
+      // Missing/wrong emit silently writes juel.undefined on settle.
+      if (layer === 'palam') {
+        if (typeof e.emit !== 'string' || e.emit === '')
+          bad(`${path}.emit`, 'must be a non-empty string (the juel it crystallizes into)')
+        for (const key of ['per', 'decay'])
+          if (e[key] !== undefined && !isNum(e[key])) bad(`${path}.${key}`, 'must be a number')
+      }
+    }
+  }
+  if (d.juel !== undefined && d.juel !== null) {
+    if (!isMap(d.juel)) bad('juel', 'must be a map of gem counts')
+    for (const [k, v] of Object.entries(d.juel))
+      if (!isNum(v)) bad(`juel.${k}`, 'must be a number')
+  }
+  if (d.buffs !== undefined && d.buffs !== null) {
+    if (!Array.isArray(d.buffs)) bad('buffs', 'must be an array')
+    for (const [i, b] of d.buffs.entries())
+      if (!isMap(b)) bad(`buffs[${i}]`, 'must be a buff map')
+  }
 }
 
 function save(state) {
   writeFileSync(state.file, joinFrontmatter(state.data, state.body), 'utf8')
 }
+
+/** Tool-call notice: the dump restores structure, never comments. */
+const commentNotice = st => st.droppedComments > 0
+  ? { notice: `${st.droppedComments} comment line(s) dropped on write — dump restores structure only; keep field meaning in Notes/PERSONA.md` }
+  : {}
 
 const num = v => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
 
@@ -60,7 +114,7 @@ export function applyDelta(personaDir, { base = {}, palam = {}, relations = {} }
     changed.push({ layer: 'relations', key: k, before, after, clamped: after !== before + Math.trunc(num(dv)) })
   }
   save(st)
-  return { changed, effective: renderStateSummary(st.data) }
+  return { changed, effective: renderStateSummary(st.data), ...commentNotice(st) }
 }
 
 // ---------------------------------------------------------------- buffs ----
@@ -75,7 +129,7 @@ export function applyBuff(personaDir, { name, domain = 'misc', duration = null, 
   if (i >= 0) d.buffs[i] = buff  // refresh, not stack
   else d.buffs.push(buff)
   save(st)
-  return { buff, refreshed: i >= 0 }
+  return { buff, refreshed: i >= 0, ...commentNotice(st) }
 }
 
 export function clearBuffs(personaDir, { name, domain } = {}) {
@@ -86,7 +140,7 @@ export function clearBuffs(personaDir, { name, domain } = {}) {
   else d.buffs = (d.buffs ?? []).filter(b =>
     name !== undefined ? b.name !== name : b.domain !== domain)
   save(st)
-  return { removed: before - d.buffs.length }
+  return { removed: before - d.buffs.length, ...commentNotice(st) }
 }
 
 /** Decrement turn-based buff durations; returns expired names. Called per turn. */
@@ -147,7 +201,7 @@ export function settle(personaDir) {
     }
   }
   save(st)
-  return { palamDelta, juelGained, levelUps, juel: d.juel }
+  return { palamDelta, juelGained, levelUps, juel: d.juel, ...commentNotice(st) }
 }
 
 /** Append free text to the STATE.md body (the only writable prose field). */
@@ -155,7 +209,7 @@ export function appendNote(personaDir, text) {
   const st = loadState(personaDir)
   st.body = st.body.replace(/\s*$/, '') + '\n' + text + '\n'
   save(st)
-  return { appended: true }
+  return { appended: true, ...commentNotice(st) }
 }
 
 // ---------------------------------------------------------------- render ---

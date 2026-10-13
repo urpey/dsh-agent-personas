@@ -2,13 +2,41 @@
  * Minimal YAML frontmatter utilities for persona files.
  * Supports the subset this project writes: scalars, nested maps (2-space indent),
  * block maps of maps, flow maps `{ a: 1 }`, flow/block arrays, and `+N` ints.
+ * Trailing `#` comments are stripped (quote-aware); callers get a
+ * `droppedComments` count so writers can warn that dumps don't restore them.
+ * Malformed lines throw — a value that can't be parsed must never degrade
+ * into a silent string, because a later write-back would drop its schema keys.
  * Not a general YAML parser — authoring stays inside this grammar by contract.
  */
 
 export function splitFrontmatter(text) {
   const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(text)
   if (!m) return { data: {}, body: text }
-  return { data: parseYaml(m[1]), body: m[2] }
+  const src = m[1]
+  const droppedComments = src.split(/\r?\n/).filter(l => {
+    const t = l.trim()
+    return t !== '' && (t.startsWith('#') || stripComment(t) !== t)
+  }).length
+  return { data: parseYaml(src), body: m[2], droppedComments }
+}
+
+/**
+ * Remove a trailing `#` comment: `#` preceded by whitespace (or at index 0),
+ * ignoring `#` inside quotes. A `#` mid-token (no space before) is data.
+ * Inside a flow collection this truncates it — exactly like real YAML —
+ * and the collection then fails as unterminated rather than silently
+ * stringifying.
+ */
+export function stripComment(s) {
+  let quote = null
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]
+    if (quote === '"' && ch === '\\') { i++; continue }
+    if (quote) { if (ch === quote) quote = null; continue }
+    if (ch === '"' || ch === "'") { quote = ch; continue }
+    if (ch === '#' && (i === 0 || /\s/.test(s[i - 1]))) return s.slice(0, i)
+  }
+  return s
 }
 
 export function joinFrontmatter(data, body) {
@@ -24,13 +52,15 @@ export function parseYaml(src) {
   // stack: [{ indent, container }]
   const stack = [{ indent: -1, container: root }]
   for (const raw of lines) {
-    if (!raw.trim() || raw.trimStart().startsWith('#')) continue
+    const line = stripComment(raw.trim())
+    if (line === '') continue
     const indent = raw.length - raw.trimStart().length
-    const line = raw.trim()
     while (stack.length > 1 && indent <= stack[stack.length - 1].indent) stack.pop()
     const parent = stack[stack.length - 1].container
-    const li = line.match(/^-\s+(.*)$/)
-    if (li) {
+    const bare = line === '-'
+    const li = bare ? undefined : line.match(/^-\s+(.*)$/)?.[1]
+    if (bare || li !== undefined) {
+      const item = bare ? null : parseScalar(li)
       if (!Array.isArray(parent)) {
         // convert last key's value into an array
         const holder = stack[stack.length - 1]
@@ -39,15 +69,15 @@ export function parseYaml(src) {
           const arr = []
           grand[holder.lastKey] = arr
           holder.container = arr
-          arr.push(parseScalar(li[1]))
+          arr.push(item)
           continue
         }
       }
-      parent.push(parseScalar(li[1]))
+      parent.push(item)
       continue
     }
     const kv = line.match(/^([^\s:]+):\s*(.*)$/)
-    if (!kv) continue
+    if (!kv) throw new Error(`frontmatter line not parseable: ${line}`)
     const [, key, rest] = kv
     if (rest === '') {
       // nested container; decide array vs map on next child line — store map, mark key
@@ -64,21 +94,33 @@ export function parseYaml(src) {
 
 function parseScalar(s) {
   s = s.trim()
-  if (s === '') return ''
+  if (s === '') return null
   if (s === 'null' || s === '~') return null
   if (s === 'true') return true
   if (s === 'false') return false
-  if (s.startsWith('{') && s.endsWith('}')) return parseFlowMap(s)
-  if (s.startsWith('[') && s.endsWith(']')) {
-    const inner = s.slice(1, -1).trim()
-    if (!inner) return []
-    return inner.split(',').map(t => parseScalar(t))
+  if (s.startsWith('{') || s.startsWith('[')) {
+    const close = s.startsWith('{') ? '}' : ']'
+    if (!s.endsWith(close)) {
+      // A comment inside the brackets truncates this scalar (real YAML does
+      // the same) — but silently stringifying the fragment corrupts the
+      // layer entry, so it must be loud.
+      throw new Error(`unterminated flow collection in scalar: ${s}`)
+    }
+    return s.startsWith('{')
+      ? parseFlowMap(s)
+      : parseFlowArray(s)
   }
   const q = s.match(/^(['"])(.*)\1$/s)
   if (q) return q[2]
   if (/^[+-]?\d+$/.test(s)) return parseInt(s, 10)
   if (/^[+-]?\d*\.\d+$/.test(s)) return parseFloat(s)
   return s
+}
+
+function parseFlowArray(s) {
+  const inner = s.slice(1, -1).trim()
+  if (!inner) return []
+  return inner.split(',').map(t => parseScalar(t))
 }
 
 function parseFlowMap(s) {
@@ -95,7 +137,8 @@ function parseFlowMap(s) {
   if (cur) parts.push(cur)
   for (const part of parts) {
     const kv = part.match(/^\s*([^:]+):\s*(.*)$/)
-    if (kv) out[kv[1].trim()] = parseScalar(kv[2])
+    if (!kv) throw new Error(`flow map entry missing ':' in ${s}`)
+    out[kv[1].trim()] = parseScalar(kv[2])
   }
   return out
 }

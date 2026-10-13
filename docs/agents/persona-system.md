@@ -70,13 +70,28 @@ relations:
   lead: { value: 0 }
 
 # Buffs — temporary deltas applied on top of base (or palam) values
+# duration counts turns; null = persistent
 buffs:
-  - { name: caffeine, domain: physical, duration: 4,      # turns; null = persistent
-      deltas: { energy: +15, focus: +10 } }
+  - { name: caffeine, domain: physical, duration: 4, deltas: { energy: +15, focus: +10 } }
 ---
 ## Notes
 Free-text notes for future selves. `state_update` may append here.
 ```
+
+Grammar contract (enforced by `bundle/lib/frontmatter.js`, a minimal parser —
+not general YAML):
+
+- `#` comments are allowed on their own line and trailing a value; the parser
+  strips them. **Tools do not write comments back** — the first `state_*` write
+  reports `notice: "N comment line(s) dropped"`; keep field meaning in
+  PERSONA.md/Notes if it must persist.
+- A `#` inside a flow collection truncates it (`{ a: 1 # note }` is an error):
+  put the comment after the closing bracket. `#` inside quotes is literal.
+- Flow collections must stay on one line; a line that can't be parsed throws
+  instead of degrading into a silent string. `loadState` also validates layer
+  shapes (entries are maps, `palam.*.emit` non-empty, `juel`/numeric fields
+  numeric, `buffs` an array) so a hand-edit that drifts fails at load, not
+  mid-write after schema keys were already lost.
 
 ## Write-channel rules (enforced)
 

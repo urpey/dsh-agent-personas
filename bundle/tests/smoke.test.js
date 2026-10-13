@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { splitFrontmatter } from '../lib/frontmatter.js'
+import { splitFrontmatter, parseYaml } from '../lib/frontmatter.js'
 import { createPersona, renderPersonaPrefix, renderPersonaBody, stripPersonaText, listPersonas, libraryRoot } from '../lib/persona.js'
 import { readBinding, writeBinding, clearBinding } from '../lib/bindings.js'
 import * as mem from '../lib/memory-store.js'
@@ -154,6 +154,59 @@ test('turn mode notices: staged critical turn vs one-step routine turn', async (
   const s2 = stageTwoPrompt({ name: 'alice' })
   assert.match(s2, /stage 2 of 2/)
   assert.match(s2, /Output ONLY the reply/)
+})
+
+test('frontmatter: trailing comments strip, malformed lines throw', () => {
+  // Trailing comments are legal YAML and must not corrupt the value.
+  const d = parseYaml('palam:\n  joy: { emit: favor, per: 100, value: 0 }  # 被夸\nkey: 1 # note\nlist:\n  - x  # item note')
+  assert.equal(d.palam.joy.value, 0)
+  assert.equal(d.palam.joy.emit, 'favor')
+  assert.equal(d.key, 1)
+  assert.deepEqual(d.list, ['x'])
+  // `#` inside quotes is data, not a comment.
+  const q = parseYaml('v: "keep #me"')
+  assert.equal(q.v, 'keep #me')
+  // Malformed lines fail fast instead of silently stringifying.
+  assert.throws(() => parseYaml('joy: { a: 1 # oops'), /unterminated/)
+  assert.throws(() => parseYaml('joy: { a: 1, b }'), /:/)
+  assert.throws(() => parseYaml('just some prose'), /line/)
+})
+
+test('commented STATE.md: delta applies, schema keys survive write-back', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'persona-comment-'))
+  writeFileSync(join(dir, 'STATE.md'), [
+    '---',
+    'palam:',
+    '  joy: { emit: favor, per: 100, decay: 20, value: 0 }  # 被夸、被投喂',
+    'relations:',
+    '  user: { value: 80 }   # 主人的话永远算数',
+    '---',
+    '',
+  ].join('\n'))
+  const r = st.applyDelta(dir, { palam: { joy: 4 }, relations: { user: 8 } })
+  assert.equal(r.changed.find(c => c.key === 'joy').after, 4)
+  assert.equal(r.changed.find(c => c.key === 'user').after, 88)
+  // The deeper hazard: emit/per/decay must survive load→mutate→save,
+  // and the operator must be told comments were dropped.
+  const d = st.loadState(dir).data
+  assert.equal(d.palam.joy.emit, 'favor')
+  assert.equal(d.palam.joy.per, 100)
+  assert.match(r.notice ?? '', /comment.*dropped/)
+})
+
+test('state shape: scalar-corrupted layer entries fail fast at load', () => {
+  const cases = [
+    ['palam string entry', 'palam:\n  joy: oops\n', /palam\.joy must be a map/],
+    ['base scalar entry', 'base:\n  energy: 50\n', /base\.energy must be a map/],
+    ['missing emit', 'palam:\n  joy: { per: 100, value: 0 }\n', /emit/],
+    ['non-numeric juel', 'juel:\n  favor: soon\n', /juel\.favor must be a number/],
+    ['buffs not array', 'buffs: { name: x }\n', /buffs must be an array/],
+  ]
+  for (const [label, yaml, re] of cases) {
+    const dir = mkdtempSync(join(tmpdir(), 'persona-bad-'))
+    writeFileSync(join(dir, 'STATE.md'), `---\n${yaml}---\n`)
+    assert.throws(() => st.loadState(dir), re, label)
+  }
 })
 
 test('settle: decay is % of remainder kept — never grows palam', () => {
