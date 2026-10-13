@@ -2,10 +2,9 @@
  * dsh-persona-system — persistent persona engine for DeepSeek Harness.
  *
  * A single Host plugin row. It:
- *  - watches `agent/created` for persona-bound agents (provider spawns,
- *    `.persona/.bindings/` ledger, `subagent/descriptor` markers, pending
- *    maps) and equips them with the memory/state tool surface plus persona
- *    prompt sections;
+ *  - watches `agent/created` for persona-bound agents (the pending maps of a
+ *    live spawn, the `.persona/.bindings/` ledger of a resumed one) and equips
+ *    them with the memory/state tool surface plus persona prompt sections;
  *  - registers the `persona` SubagentProvider (delegates to `spawn`, adds the
  *    persona-profile binding side-channel);
  *  - registers `/persona` slash commands and the `persona_list`/`persona_spawn`
@@ -14,15 +13,20 @@
  * Persona content lives in `<workspace>/.persona/<name>/` — never in this file.
  */
 
-import { personaExists, ensurePersona, listPersonas, libraryRoot, parseProfileMarker } from './lib/persona.js'
+import { personaExists, ensurePersona, listPersonas, libraryRoot } from './lib/persona.js'
 import { equipAgent } from './lib/equip.js'
 import { createPersonaProvider, pendingContinuable, pendingOneShot, takeOneShot, queueOneShot, personaRequestText, personaBodyText } from './lib/provider.js'
 import { registerCommands } from './lib/commands.js'
-import { readBinding, clearBinding } from './lib/bindings.js'
+import { readBinding, clearBinding, persistBinding } from './lib/bindings.js'
 import { randomUUID } from 'node:crypto'
 
-/** AgentId → { name, dispose } for /persona use|off and teardown. */
-const equipped = new Map()
+/**
+ * A signal that never aborts, for the paths where the caller supplies none.
+ * `new AbortSignal()` is a TypeError ("Illegal constructor") — `AbortSignal` is
+ * an interface, not a constructible class — and the subagent entry points call
+ * `signal.throwIfAborted()`.
+ */
+const NEVER_ABORTS = new AbortController().signal
 
 export default {
   name: 'persona-system',
@@ -49,6 +53,10 @@ export default {
 
   // ------------------------------------------------------------- equip watch
   ctx.on('agent/created', ({ agent }) => {
+    // The equip state lives ON the agent (agent.id === session.id), not in a
+    // module-level table: an HMR reload rebuilds the module but the agent —
+    // and this property — survives, so commands never read a stale answer.
+    if (agent.personaEquip) return
     let personaName
     // 1) continuable spawn: pending by child session id
     personaName = pendingContinuable.get(agent.id) ?? pendingContinuable.get(agent.session?.header?.id)
@@ -59,23 +67,17 @@ export default {
       const parentId = agent.session?.header?.parentSession
       if (parentId) { personaName = takeOneShot(parentId); if (personaName) mode = 'one-shot' }
     }
-    // 3) durable rebind: /persona use binding ledger (resume).
-    // Bindings live in `.persona/.bindings/<sessionId>.json`, not in the
-    // session log — see lib/bindings.js for why a session event can't work.
+    // 3) durable rebind: the `.persona/.bindings/` ledger. Written by
+    // `/persona use` for the session it equipped and by every spawn path for
+    // the child session it created, so this is the one channel that re-equips a
+    // resumed session — root or child — after a restart. The ledger lives in
+    // `.persona/.bindings/<sessionId>.json`, not in the session log — see
+    // lib/bindings.js for why a session event can't work.
     if (!personaName) {
       const cwd = resolveCwd(agent)
       const sessionId = agent.session?.header?.id ?? agent.session?.id
       personaName = readBinding(libraryRoot(cwd, cfg.libraryDir), sessionId)
       if (personaName) mode = 'session'
-    }
-    // 4) subagent descriptor replay (cold-resumed continuable child)
-    if (!personaName) {
-      try {
-        const evs = agent.session.snapshotEvents?.() ?? []
-        const d = evs.find(e => e.type === 'subagent/descriptor')
-        const parsed = parseProfileMarker(d?.data?.persona)
-        if (parsed) { personaName = parsed; mode = 'continuable' }
-      } catch { /* ignore */ }
     }
     if (!personaName) return
     const cwd = resolveCwd(agent)
@@ -89,8 +91,9 @@ export default {
     }
     const dir = ensurePersona(cwd, personaName, cfg.libraryDir)
     const dispose = equipAgent(agent.ctx, agent, dir, personaName, cfg, mode ?? 'session')
-    equipped.set(agent.id, { name: personaName, dispose })
-    agent.ctx.on?.('agent/disposed', () => { equipped.delete(agent.id) })
+    // The agent object carries the equip for its whole life — the property
+    // dies with the agent, which is exactly the session's lifetime.
+    agent.personaEquip = { name: personaName, dispose }
   })
 
   // ------------------------------------------------------- model-facing tools
@@ -145,27 +148,40 @@ export default {
           prompt: [{ type: 'text', text: args.prompt }],
           parent: agent,
           persona: personaText,
-          signal: exec.signal ?? new AbortSignal(),
+          signal: exec.signal ?? NEVER_ABORTS,
         })
+        const bindingNote = persistBinding(libraryRoot(cwd, cfg.libraryDir), run.id, args.name)
         const result = await run.result
-        return { mode: 'one-shot', childId: run.id, stopReason: result.stopReason, output: result.output }
+        return { mode: 'one-shot', childId: run.id, stopReason: result.stopReason, output: result.output, bindingNote }
       }
       const childId = randomUUID()
       pendingContinuable.set(childId, args.name)
-      const { childId: id, messageId } = await ctx.subagents.startContinuable({
-        childId,
-        provider: cfg.providerName,
-        label: args.label ?? `persona:${args.name}`,
-        // Name is bound via pendingContinuable; prompt text must not carry
-        // the marker/frontmatter.
-        request: { parent: agent, prompt: [{ type: 'text', text: args.prompt }], persona: personaBodyText(cwd, args.name, cfg.libraryDir) },
-        signal: exec.signal ?? new AbortSignal(),
-      })
-      return { mode: 'continuable', childId: id, messageId }
+      let id, messageId
+      try {
+        const started = await ctx.subagents.startContinuable({
+          childId,
+          provider: cfg.providerName,
+          label: args.label ?? `persona:${args.name}`,
+          // Name is bound via pendingContinuable; prompt text must not carry
+          // the marker/frontmatter.
+          request: { parent: agent, prompt: [{ type: 'text', text: args.prompt }], persona: personaBodyText(cwd, args.name, cfg.libraryDir) },
+          signal: exec.signal ?? NEVER_ABORTS,
+        })
+        id = started.childId
+        messageId = started.messageId
+      } catch (e) {
+        pendingContinuable.delete(childId)   // failed spawn: no zombie pending entry
+        throw e
+      }
+      // Same registration as `/persona spawn`: the child is equipped by
+      // construction, so the picker must be able to badge it and a restart must
+      // be able to re-equip it.
+      const bindingNote = persistBinding(libraryRoot(cwd, cfg.libraryDir), id, args.name)
+      return { mode: 'continuable', childId: id, messageId, bindingNote }
     },
   })
 
   // --------------------------------------------------------------- commands
-  registerCommands(ctx, cfg, resolveCwd, equipped)
+  registerCommands(ctx, cfg, resolveCwd)
   },
 }

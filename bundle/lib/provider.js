@@ -71,7 +71,17 @@ export function createPersonaProvider(name, innerName, resolveCwd, libraryDir, c
       // Marker line and PERSONA.md frontmatter are detection metadata, not
       // persona content — strip before the text reaches the child's prompt.
       const personaText = m ? stripPersonaText(request.persona) : request.persona
-      const run = await inner.start(personaText !== request.persona ? { ...request, persona: personaText } : request)
+      let run
+      try {
+        run = await inner.start(personaText !== request.persona ? { ...request, persona: personaText } : request)
+      } catch (e) {
+        // Failed start: the child never arrives, so agent/created will never
+        // drain this queue entry — pop it ourselves, otherwise the next
+        // one-shot child of this parent consumes a stale name.
+        const q = m && parentId ? pendingOneShot.get(parentId) : undefined
+        if (q) { q.pop(); if (!q.length) pendingOneShot.delete(parentId) }
+        throw e
+      }
       if (!reflect) return run
       // The closing reflection adds a housekeeping turn AFTER the task turn.
       // readResult picks the LAST assistant message, which would be the

@@ -114,12 +114,6 @@ export function stripPersonaText(text) {
   return `${t.trim()}\n`
 }
 
-/** Parse `persona-profile:<name>` from a rendered persona text. */
-export function parseProfileMarker(text) {
-  const m = /^persona-profile:([\w-]+)\s*$/m.exec(text ?? '')
-  return m ? m[1] : undefined
-}
-
 export function readPromptAsset(name) {
   return readFileSync(join(PROMPTS, name), 'utf8')
 }

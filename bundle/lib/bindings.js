@@ -58,3 +58,27 @@ export function clearBinding(libraryRoot, sessionId) {
   if (!sessionId) return
   try { rmSync(bindingPath(libraryRoot, sessionId)) } catch { /* absent or unreadable — either way unbound */ }
 }
+
+/**
+ * Record a binding on the equip paths that already succeeded, reporting a write
+ * failure as an operator-facing note instead of throwing.
+ *
+ * The ledger is the ONLY durable owner of "which persona is this session
+ * equipped with": the client's picker reads it for the 已装备 badge and the
+ * `agent/created` listener reads it back to re-equip after a restart. So a
+ * failed write must be loud, but it must not undo an equip or a spawn that
+ * already happened — the session really is equipped; it just won't survive.
+ * @param libraryRoot - absolute `.persona/` root.
+ * @param sessionId - session header id, or the child session id of a spawn.
+ * @param name - persona archive name.
+ * @returns `''` on success, else a sentence naming the consequence.
+ */
+export function persistBinding(libraryRoot, sessionId, name) {
+  try {
+    writeBinding(libraryRoot, sessionId, name)
+    return ''
+  } catch (e) {
+    return ` Binding not persisted — this session will not re-equip after restart`
+      + ` and the picker will not show it as equipped (${e?.message ?? e}).`
+  }
+}
