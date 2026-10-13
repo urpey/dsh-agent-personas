@@ -121,7 +121,10 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
     if (session !== agent.session || event.type !== 'assistant/message') return
     const blocks = event.data?.message?.content
     if (!Array.isArray(blocks)) return
+    // The inner pass lives inside <thinking>…</thinking> in the text — strip
+    // it before scanning; mechanism vocabulary is legal there.
     const visible = blocks.filter(b => b?.type === 'text').map(b => b.text).join('\n')
+      .replace(/<thinking>[\s\S]*?<\/thinking>/g, '')
     if (!LEAK.test(visible)) return
     agent.inject?.(userMsg('[persona ooc] That last reply surfaced mechanism internals — filenames, URIs, tool names, or state numbers. Drop the machinery; answer as the persona, embody the feeling without reporting it.'))
   }))
