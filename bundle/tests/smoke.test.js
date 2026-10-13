@@ -122,23 +122,23 @@ test('buff apply/refresh/clear + tick expiry', () => {
 })
 
 test('settle crystallizes juel → param → level-up', () => {
-  // shame 260, per 50 → +5 param(intimacy); remainder 10, decay 10 → floor(10*0.1)=1 kept
+  // shame 260, per 25 → +10 param(intimacy); remainder 10, decay 5 → floor(10*0.05)=0 kept
   const r = st.settle(pd)
-  assert.equal(r.paramMoved.intimacy, 5)
-  assert.equal(st.loadState(pd).data.juel.shame.value, 1)
-  assert.equal(st.loadState(pd).data.param.intimacy, 5)
+  assert.equal(r.paramMoved.intimacy, 10)
+  assert.equal(st.loadState(pd).data.juel.shame.value, 0)
+  assert.equal(st.loadState(pd).data.param.intimacy, 10)
   // guarded requires wariness:20 — not yet. give fear and settle.
   st.applyDelta(pd, { juel: { fear: +950 } })
   const r2 = st.settle(pd)
-  // 950/100=9 param(wariness) — below 20, no level-up yet
-  assert.equal(r2.paramMoved.wariness, 9)
-  assert.equal(st.loadState(pd).data.param.wariness, 9)
-  st.applyDelta(pd, { juel: { fear: +1200 } })
+  // 950/50=19 param(wariness) — below 20, no level-up yet
+  assert.equal(r2.paramMoved.wariness, 19)
+  assert.equal(st.loadState(pd).data.param.wariness, 19)
+  st.applyDelta(pd, { juel: { fear: +600 } })
   const r3 = st.settle(pd)
-  // wariness total 9+12=21 ≥20 → guarded Lv1, param.wariness = 1
+  // wariness total 19+12=31 ≥20 → guarded Lv1, param.wariness = 11
   const d = st.loadState(pd).data
   assert.equal(d.marks.guarded.level, 1)
-  assert.equal(d.param.wariness, 1)
+  assert.equal(d.param.wariness, 11)
   assert.equal(r3.levelUps[0].key, 'guarded')
 })
 

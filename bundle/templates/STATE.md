@@ -12,11 +12,11 @@ base:
 # emit: which param it settles into · per: points per unit · decay: % of
 # remainder kept after settle (0 clears it, 100 carries it over whole).
 juel:
-  joy:     { emit: affection, per: 100, decay: 20, value: 0 }
-  anger:   { emit: defiance,  per: 100, decay: 30, value: 0 }
-  shame:   { emit: intimacy,  per: 50,  decay: 10, value: 0 }
-  fear:    { emit: wariness,  per: 100, decay: 20, value: 0 }
-  fatigue: { emit: edginess,  per: 100, decay: 0,  value: 0 }
+  joy:     { emit: affection, per: 50, decay: 10, value: 0 }
+  anger:   { emit: defiance,  per: 50, decay: 15, value: 0 }
+  shame:   { emit: intimacy,  per: 25, decay: 5,  value: 0 }
+  fear:    { emit: wariness,  per: 50, decay: 10, value: 0 }
+  fatigue: { emit: edginess,  per: 50, decay: 0,  value: 0 }
 
 # Layer 2 · PARAM — persistent standing (settle-only; relational stock, not mood)
 # affection 亲昵 · defiance 反发/反抗 · intimacy 亲密 · wariness 戒备 · edginess 毛边

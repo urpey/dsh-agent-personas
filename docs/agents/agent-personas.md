@@ -66,11 +66,11 @@ base:
 # emit → which param it settles into; per → points per unit;
 # decay → % of remainder kept after settle (0–100, applied toward zero)
 juel:
-  joy:     { emit: affection, per: 100, decay: 20, value: 0 }
-  anger:   { emit: defiance,  per: 100, decay: 30, value: 0 }
-  shame:   { emit: intimacy,  per: 50,  decay: 10, value: 0 }
-  fear:    { emit: wariness,  per: 100, decay: 20, value: 0 }
-  fatigue: { emit: edginess,  per: 100, decay: 0,  value: 0 }
+  joy:     { emit: affection, per: 50, decay: 10, value: 0 }
+  anger:   { emit: defiance,  per: 50, decay: 15, value: 0 }
+  shame:   { emit: intimacy,  per: 25, decay: 5,  value: 0 }
+  fear:    { emit: wariness,  per: 50, decay: 10, value: 0 }
+  fatigue: { emit: edginess,  per: 50, decay: 0,  value: 0 }
 
 # Layer 2 · PARAM — persistent standing (settle-only)
 # Relational stock, not mood: 亲昵/反发/亲密/戒备/毛边 — what the emotion
@@ -212,6 +212,11 @@ A negative `juel` balance is **banked amends**: `Math.trunc` keeps the sign, so
 percentage of the leftover remainder that survives the settle, applied toward
 zero on both sides: `0` clears it (fatigue), `100` carries it over whole. A
 settle never grows an accumulator — the leftover only shrinks.
+
+Cadence: `decay` fires **once per settle, not per turn** — settles happen at
+chapter end (`state_settle` by the model, or the closing-reflection housekeeping
+turn for one-shot/`always` sessions). Between settles a juel balance does not
+drift on its own; the only per-turn clock lives on `base.*.tick`.
 
 Delta magnitude guidance lives in `bundle/prompts/protocol.md`: ±1–5 nudge, ±5–15 notable, ±15–30 significant, ±30–50 severe.
 
