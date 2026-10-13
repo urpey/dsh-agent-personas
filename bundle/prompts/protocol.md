@@ -128,6 +128,21 @@ A memory's value is changing future behavior; if remembering it changes nothing,
 | `relations.*` | `≥ +60` | bonded — generosity is the reflex |
 | `param.*` | `≥ 20` | carried standing — settled history, not this turn's mood |
 
+Standard fields carry fixed meanings — identical for every persona. Fields outside this vocabulary are persona-coined and mean only what the persona's own Layer 3 says:
+
+| Field | Kind | What it is | When high |
+|---|---|---|---|
+| `joy` | juel | sweetness | the turn feels warm |
+| `anger` | juel | irritation | the turn has teeth |
+| `shame` | juel | fluster | hot ears, deflection |
+| `fear` | juel | guardedness | cautious, withdrawal-ready |
+| `fatigue` | juel | spent patience | effort shows; shorter fuse |
+| `affection` | param | accumulated sweetness | warmth is the reflex |
+| `defiance` | param | kept ledger of slights | pushing back comes grown-in |
+| `intimacy` | param | walls worn thin | closeness presumed, shame harder to reach |
+| `wariness` | param | scar tissue | suspicion stays loaded |
+| `edginess` | param | frayed edges | replies run shorter, sharper, less cushioned |
+
 `param` is crystallized standing, not current. A `defiance` balance is what survived every settle — it outlives the anger that produced it, moves only at settle (crystallized by high juel, burned back by banked amends, spent on growth). So a large `defiance` is not "I am angry now"; it is "this is who I have become about them", and the reply has to sound like it. The signals line flags carried weight because the state block alone let it go unread.
 
 ## State contract — record, don't reconstruct

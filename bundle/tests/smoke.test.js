@@ -215,7 +215,7 @@ test('gate prompts: imperative, signals, stage-1 directive', () => {
   assert.match(one, /thoughts run inward/)
   assert.match(one, /analytic/)
   // State pressure shows up as concrete hints.
-  assert.match(one, /anger is running high \(40\)/)
+  assert.match(one, /anger \(irritation loading\) is running high \(40\)/)
   assert.match(one, /energy is low \(20\/100\)/)
   // Relations speak through the stance band, which covers every value — not
   // only the extremes the old rule bothered to name.
@@ -336,7 +336,7 @@ test('signals: stance for every relation, carried param flagged', () => {
   assert.match(sig, /- speaker: known \(relations user=0\)/)
   assert.match(sig, /- stance toward user: unbonded \(0\) — no standing yet — do not presume closeness/)
   // Crystallized weight is not mood; it gets its own line so the gate sees it.
-  assert.match(sig, /- carried \(standing, not this turn's mood\): defiance = 60/)
+  assert.match(sig, /- carried \(standing, not this turn's mood\): defiance = 60 — a kept ledger of slights/)
   // A small balance stays out of the signal block — no noise for pocket change.
   assert.doesNotMatch(signalsLine({ state: { param: { affection: 5 } } }), /carried/)
 })
@@ -348,7 +348,7 @@ test('state rules: a zero relation, a kept defiance, and banked amends reach the
     /user: unbonded \(0\) — no standing yet/)
   assert.match(
     stageOnePrompt({ name: 'alice', state: { param: { defiance: 60 } } }),
-    /defiance is carried \(60\) — settled standing, not this turn's mood/)
+    /defiance is carried \(60\) — a kept ledger of slights — pushing back comes grown-in; settled standing/)
   // A banked negative juel is amends waiting to burn standing on settle.
   assert.match(
     stageOnePrompt({ name: 'alice', state: { juel: { anger: { value: -30 } } } }),

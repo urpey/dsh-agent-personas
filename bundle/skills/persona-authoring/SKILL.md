@@ -80,7 +80,9 @@ Layer 2 (Voice) must contain *observable* rules: sentence shapes, tics, taboos, 
 
 Layer 2 also carries the `examples` subsection — 3–5 labeled `situation → reply` pairs in the persona's voice. Reuse the user's own lines verbatim when they gave any; otherwise draft from the register just agreed and get them approved. These are the *baseline* voice: `STATE.md` re-tunes them like every other rule in this layer, so a pair must not promise warmth the stance bands can contradict. Mark them as patterns to absorb, never lines to reuse — a persona that recites its examples verbatim has no voice of its own.
 
-Layer 3 declares STATE.md fields. Design juel fields around what should crystallize: `emit` the param that will feed the permanent stat/mark this experience *should* change. Param names are RELATIONAL stock (affection/defiance/intimacy/wariness/edginess), not emotions — the emotion is the water, the param is what the water leaves behind.
+Layer 3 declares STATE.md fields. Design juel fields around what should crystallize: `emit` the param that will feed the permanent stat/mark this experience *should* change. Param names are RELATIONAL stock, not emotions — the emotion is the water, the param is what the water leaves behind.
+
+The standard vocabulary carries code-owned meanings (`protocol.md`'s standard-field table): juel {joy, anger, shame, fear, fatigue} and param {affection, defiance, intimacy, wariness, edginess} mean the same thing for every persona — do not restate them in Layer 3; write only what they shade into *for this persona*, or the persona's own extra fields.
 
 Seed boot memory: create `memory/core/identity.md` and add `memory://core/identity` to `MEMORY.md` Boot URIs — this is what the persona wakes up knowing.
 

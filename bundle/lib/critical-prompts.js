@@ -78,6 +78,26 @@ export function relationStance(value) {
  */
 export const PARAM_NOTABLE = 20
 
+/**
+ * Standard-vocabulary meanings — code-owned, identical for every persona.
+ * A field name outside these maps is persona-coined: its meaning lives in
+ * that persona's Layer 3 prose and renders here as a bare number.
+ */
+export const JUEL_MEANINGS = {
+  joy: 'sweetness rising',
+  anger: 'irritation loading',
+  shame: 'fluster surfacing',
+  fear: 'guardedness rising',
+  fatigue: 'running thin',
+}
+export const PARAM_MEANINGS = {
+  affection: 'accumulated sweetness — warmth is the reflex',
+  defiance: 'a kept ledger of slights — pushing back comes grown-in',
+  intimacy: 'walls worn thin — closeness presumed, shame harder to reach',
+  wariness: 'scar tissue — suspicion stays loaded',
+  edginess: 'frayed edges — replies run shorter, sharper, less cushioned',
+}
+
 /** `param` entries at/above `min`, strongest first, capped. */
 export function carriedParam(state = {}, min = PARAM_NOTABLE, limit = 3) {
   return Object.entries(state.param ?? {})
@@ -177,7 +197,10 @@ function stateRules(state = {}) {
     .filter(([, v]) => v >= 15)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 2)
-  for (const [k, v] of peaks) rules.push(`- ${k} is running high (${v}) — it colors every thought this turn`)
+  for (const [k, v] of peaks) {
+    const hint = JUEL_MEANINGS[k] ? ` (${JUEL_MEANINGS[k]})` : ''
+    rules.push(`- ${k}${hint} is running high (${v}) — it colors every thought this turn`)
+  }
   // Banked amends: a negative juel is compensation that will burn standing on
   // settle — the reply should sound like the ledger is being paid down, not
   // like the wound is fresh again.
@@ -196,7 +219,8 @@ function stateRules(state = {}) {
   // Carried weight: crystallized param is settled standing, so it belongs in
   // the monologue's tuning even though no mood is driving it this turn.
   for (const [k, v] of carriedParam(state)) {
-    rules.push(`- ${k} is carried (${v}) — settled standing, not this turn's mood; it sets your baseline until amends or growth move it`)
+    const hint = PARAM_MEANINGS[k] ? ` — ${PARAM_MEANINGS[k]}` : ''
+    rules.push(`- ${k} is carried (${v})${hint}; settled standing, not this turn's mood — it sets your baseline until amends or growth move it`)
   }
   for (const b of state.buffs ?? []) rules.push(`- buff "${b.name}" is active — it is literally on your mind`)
   return rules.length ? rules.join('\n') : '- state is flat — let personality, not mood, carry this one'
@@ -241,12 +265,12 @@ export function signalsLine({ state = {}, meta = {}, text = '' } = {}) {
     .map(([k, p]) => [k, Number(p?.value) || 0])
     .filter(([, v]) => v >= 30)
     .sort((a, b) => b[1] - a[1])
-  if (hot.length) lines.push(`- ${hot.map(([k, v]) => `${k} = ${v}`).join(', ')} — already hot`)
+  if (hot.length) lines.push(`- ${hot.map(([k, v]) => `${k} = ${v}${JUEL_MEANINGS[k] ? ` (${JUEL_MEANINGS[k]})` : ''}`).join(', ')} — already hot`)
   // Crystallized weight, flagged separately from mood: settled standing
   // outlives the juel that produced it, and it is invisible to every other
   // surface.
   const carried = carriedParam(state)
-  if (carried.length) lines.push(`- carried (standing, not this turn's mood): ${carried.map(([k, v]) => `${k} = ${v}`).join(', ')}`)
+  if (carried.length) lines.push(`- carried (standing, not this turn's mood): ${carried.map(([k, v]) => `${k} = ${v}${PARAM_MEANINGS[k] ? ` — ${PARAM_MEANINGS[k]}` : ''}`).join(', ')}`)
   const buffs = (state.buffs ?? []).map(b => b?.name).filter(Boolean)
   if (buffs.length) lines.push(`- active buffs: ${buffs.join(', ')}`)
   // JSON.stringify keeps a multi-line input on one signal line and makes the
