@@ -12,7 +12,7 @@ import * as state from './state-store.js'
 import { renderStateSummary } from './state-store.js'
 import { splitFrontmatter } from './frontmatter.js'
 import { assessTurn } from './critical.js'
-import { stageOnePrompt, stageTwoPrompt } from './critical-prompts.js'
+import { modeNotice } from './critical-prompts.js'
 
 const PLUGIN = 'dsh-persona-system'
 const WRITE_TOOLS = new Set(['write', 'edit', 'multi_edit', 'bash'])
@@ -269,17 +269,6 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
     { type: 'object', properties: { text: { type: 'string' } }, required: ['text'], additionalProperties: false },
     async ({ text }) => state.appendNote(personaDir, text)))
 
-  // ---- inner_commit: the step-cutting tool that carries stage 1 → stage 2 --
-  // Exists only so a critical turn can end its first generation AFTER the
-  // <thinking> monologue and re-enter with the transform directive.
-  T(jsonTool('inner_commit',
-    'Commit the inner monologue you just emitted in <thinking>…</thinking>. Call this immediately after the block on a critical turn — it ends stage 1 and hands you the stage-2 transform directive.',
-    { type: 'object', properties: {}, additionalProperties: false },
-    async (_a, exec) => {
-      try { exec?.agent?.session?.append('persona/stage', { stage: 2, turn: 'mark' }) } catch {}
-      return stageTwoPrompt({ name })
-    }))
-
   // Observe turn failures through the agent scope logger (host log).
   reg(agentCtx.on('agent/error', ({ turn, step, error }) => {
     agentCtx.logger?.warn?.(`[persona:${name}] turn ${turn} step ${step} error:`, error)
@@ -326,16 +315,23 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
     if (decision.kind !== 'enter') return decision
     const extra = []
     const text = latestText(decision)
-    // Critical gate — the upstream design step 0. Fresh user input on a new turn,
-    // not one of our own injected notices, may escalate to two-generation.
+    // Step 0 — the gate, run BEFORE this turn's generation starts.
+    // It fixes the turn's shape: 1 segment (reply) or 2 (<thinking> + reply).
+    // Both shapes are a single LLM call; only the segment count differs.
     if (step === 1 && text && !text.startsWith('[persona')) {
       try {
         const st = state.loadState(personaDir)
-        const { critical, reason } = assessTurn({
-          text, meta, state: st.data, extraKeywords: cfg.criticalKeywords ?? [],
-        })
-        if (critical) extra.push(userMsg(stageOnePrompt({ name, mbti: meta.mbti ?? '', state: st.data, reason })))
-      } catch { /* unreadable state — gate silently stays open */ }
+        const gate = cfg.criticalGate ?? 'auto'
+        const { critical, reason } = gate === 'never'
+          ? { critical: false, reason: '' }
+          : gate === 'always'
+            ? { critical: true, reason: 'gate forced always' }
+            : assessTurn({ text, meta, state: st.data, extraKeywords: cfg.criticalKeywords ?? [] })
+        extra.push(userMsg(modeNotice({
+          mode: critical ? 'two' : 'one',
+          mbti: meta.mbti ?? '', state: st.data, reason,
+        })))
+      } catch { /* unreadable state — turn proceeds without a mode notice */ }
     }
     // Trigger-based recall: inject full node bodies for hits not yet shown.
     for (const hit of recallHits(text)) {

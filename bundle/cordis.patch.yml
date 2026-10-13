@@ -6,3 +6,6 @@
         groundingInterval: 0
         closingReflection: 'one-shot'
         providerName: 'persona'
+        # auto: step-0 gate decides 1-segment vs 2-segment turns | always | never
+        criticalGate: 'auto'
+        criticalKeywords: []

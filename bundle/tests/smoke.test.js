@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { splitFrontmatter } from '../lib/frontmatter.js'
@@ -61,15 +61,15 @@ test('buff apply/refresh/clear + tick expiry', () => {
 })
 
 test('settle crystallizes palam → juel → level-up', () => {
-  // shame 260, per 50 → +5 juel(shame); decay 10 → remainder 10 + floor(10*0.9)=19
+  // shame 260, per 50 → +5 juel(shame); remainder 10, decay 10 → floor(10*0.1)=1 kept
   const r = st.settle(pd)
   assert.equal(r.juelGained.shame, 5)
-  assert.equal(st.loadState(pd).data.palam.shame.value, 19)
+  assert.equal(st.loadState(pd).data.palam.shame.value, 1)
   assert.equal(st.loadState(pd).data.juel.shame, 5)
   // humiliation requires shame:20 — not yet. give more shame and settle.
   st.applyDelta(pd, { palam: { shame: +950 } })
   const r2 = st.settle(pd)
-  // 969/50=19 juel → total 24 ≥20 → humiliation Lv1, juel.shame = 4
+  // 951/50=19 juel → total 24 ≥20 → humiliation Lv1, juel.shame = 4
   const d = st.loadState(pd).data
   assert.equal(d.marks.humiliation.level, 1)
   assert.equal(d.juel.shame, 4)
@@ -125,4 +125,49 @@ test('critical gate: criticality criteria', async () => {
   assert.equal(assessTurn({ text: '随便看看', state: { ...st, buffs: [{ name: 'adrenaline' }] } }).critical, true)
   // routine
   assert.equal(assessTurn({ text: '列一下文件', state: st }).critical, false)
+})
+
+test('turn mode notices: 1-segment vs 2-segment, single call', async () => {
+  const { modeNotice } = await import('../lib/critical-prompts.js')
+  const one = modeNotice({ mode: 'one' })
+  assert.match(one, /1-segment turn/)
+  assert.match(one, /No <thinking> block/)
+  const two = modeNotice({
+    mode: 'two', mbti: 'INTP', reason: 'keyword "错"',
+    state: { palam: { anger: { value: 40 } }, base: { energy: { value: 20, max: 100 } }, relations: { lead: { value: -40 } }, buffs: [{ name: 'adrenaline' }] },
+  })
+  assert.match(two, /2-segment turn/)
+  assert.match(two, /STATE:/)
+  // MBTI letters are expanded into tuning hints, not printed raw.
+  assert.match(two, /thoughts run inward/)
+  assert.match(two, /analytic/)
+  // State pressure shows up as concrete hints.
+  assert.match(two, /anger is running high \(40\)/)
+  assert.match(two, /energy is low \(20\/100\)/)
+  assert.match(two, /distrust lead/)
+  assert.match(two, /adrenaline/)
+  // No structural tool is referenced anymore — one call, two segments.
+  assert.doesNotMatch(two, /inner_commit/)
+})
+
+test('settle: decay is % of remainder kept — never grows palam', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'persona-settle-'))
+  mkdirSync(join(dir, 'memory'), { recursive: true })
+  writeFileSync(join(dir, 'STATE.md'), [
+    '---',
+    'palam:',
+    '  shame: { emit: shame, per: 50, decay: 10, value: 28 }',
+    '  joy: { emit: favor, per: 100, decay: 20, value: 130 }',
+    '  fatigue: { emit: fatigue, per: 100, decay: 0, value: 40 }',
+    'juel: { shame: 0, favor: 0, fatigue: 0 }',
+    '---',
+    '',
+  ].join('\n'))
+  const out = st.settle(dir)
+  const after = st.loadState(dir).data
+  assert.equal(after.palam.shame.value, 2)     // floor(28 * 0.10)
+  assert.equal(after.palam.joy.value, 6)       // floor(30 * 0.20)
+  assert.equal(after.palam.fatigue.value, 0)   // decay 0 clears it
+  assert.equal(out.juelGained.favor, 1)        // 130 / per 100
+  for (const [k, d] of Object.entries(out.palamDelta)) assert.ok(d.after <= d.before, `${k} grew`)
 })

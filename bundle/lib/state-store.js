@@ -121,7 +121,9 @@ export function settle(personaDir) {
     const decay = clamp(num(p.decay ?? 0), 0, 100)
     const gain = Math.floor(value / per)
     const remainder = value % per
-    const kept = remainder + Math.floor(remainder * (100 - decay) / 100)
+    // decay = % of the remainder that SURVIVES the settle (0 clears it,
+    // 100 carries it over whole). A settle never grows an accumulator.
+    const kept = Math.floor(remainder * decay / 100)
     if (gain > 0 || value !== kept) {
       palamDelta[key] = { before: value, after: kept, emitted: gain, juel: p.emit }
       if (gain > 0) {

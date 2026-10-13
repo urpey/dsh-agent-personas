@@ -36,6 +36,8 @@ export default {
     groundingInterval: config?.groundingInterval ?? 0,
     closingReflection: config?.closingReflection ?? 'one-shot',
     providerName: config?.providerName ?? 'persona',
+    criticalGate: config?.criticalGate ?? 'auto',
+    criticalKeywords: config?.criticalKeywords ?? [],
   }
 
   const resolveCwd = (agent) =>

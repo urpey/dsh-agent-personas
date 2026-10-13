@@ -96,11 +96,15 @@ Free-text notes for future selves. `state_update` may append here.
 per palam field p:
   gain    = floor(p.value / p.per)
   juel[p.emit] += gain
-  p.value  = (p.value % p.per) + floor(p.value / p.per * (p.decay / 100))
+  p.value  = floor((p.value % p.per) * (p.decay / 100))
 per stats/marks entry (in declared order, max +1 level per settle):
   if level < 15 and juel satisfies every requires key → deduct, level++
 returns { palamDelta, juelGained, levelUps }
 ```
+
+`decay` is the percentage of the leftover remainder that survives the settle:
+`0` clears it (fatigue), `100` carries it over whole. A settle never grows an
+accumulator — the leftover only shrinks.
 
 Delta magnitude guidance lives in `bundle/prompts/protocol.md`: ±1–5 nudge, ±5–15 notable, ±15–30 significant, ±30–50 severe.
 

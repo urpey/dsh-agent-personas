@@ -86,15 +86,10 @@ export function createPersonaProvider(name, innerName, resolveCwd, libraryDir, c
             && (e.data?.content ?? []).some(b => b?.type === 'text' && b.text?.startsWith('[persona closing]'))
           const cut = evs.findIndex(isClosing)
           const taskEvs = cut < 0 ? evs : evs.slice(0, cut)
-          const pick = (arr) => [...arr].reverse()
+          // The task answer is the last assistant message before the closing
+          // reflection turn — not the reflection's housekeeping chatter.
+          const prior = [...taskEvs].reverse()
             .find(e => e.type === 'assistant/message' && e.data?.message?.content?.length)
-          // Critical turn: the styled reply is the FIRST assistant text after
-          // the stage-2 mark; later housekeeping (settle notes, acks) is not it.
-          const mark = taskEvs.findIndex(e => e.type === 'persona/stage' && e.data?.stage === 2)
-          const prior = mark >= 0
-            ? taskEvs.slice(mark + 1).find(e => e.type === 'assistant/message'
-                && (e.data?.message?.content ?? []).some(b => b?.type === 'text'))
-            : pick(taskEvs)
           return prior ? { ...res, output: prior.data.message.content } : res
         } catch { return res }
       })
