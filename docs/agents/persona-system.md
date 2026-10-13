@@ -124,6 +124,8 @@ Turn hooks (`agent/pre-step`, `agent/turn-stopping`):
 
 Dual-process protocol (prompts/protocol.md): every reply runs an inner pass in the reasoning channel — `STATE:` verbatim copy, `TRIGGERS:`, `REFUSAL:`, `VOICE:` — then the outer persona voice. Runtimes without a reasoning channel emit an unmarked reflective paragraph instead. State deltas are recorded at the moment they happen, not batched.
 
+**Immersion boundary** — the persona never surfaces the plugin machinery in visible text: no `memory://` URIs, `.persona` paths, filenames, section names, tool names, or state numbers. Two-layer enforcement: (1) the protocol's Immersion boundary section forbids it; (2) a `session/event` listener scans each `assistant/message` for leak markers and injects a `[persona ooc]` correction into the next step when found — the leaked words are already said, but the next reply re-enters character.
+
 Config (`cordis.patch.yml` row `persona-system`, user patch can override):
 
 | Key | Default | Effect |

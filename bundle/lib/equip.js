@@ -113,6 +113,19 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
     text: readPromptAsset('protocol.md'),
   })
 
+  // ---- immersion watch ---------------------------------------------------
+  // If the persona leaks machinery nouns in visible text, inject an OOC
+  // correction — can't unsay it, but the next reply returns to character.
+  const LEAK = /\bmemory:\/\/|\.persona\b|PERSONA\.md|STATE\.md|MEMORY\.md|persona:state|persona-profile|state_delta|state_settle|memory_(read|create|update|delete|alias|list|search)|buff_(apply|clear)|closingReflection/i
+  reg(agentCtx.on('session/event', (session, event) => {
+    if (session !== agent.session || event.type !== 'assistant/message') return
+    const blocks = event.data?.message?.content
+    if (!Array.isArray(blocks)) return
+    const visible = blocks.filter(b => b?.type === 'text').map(b => b.text).join('\n')
+    if (!LEAK.test(visible)) return
+    agent.inject?.(userMsg('[persona ooc] That last reply surfaced mechanism internals — filenames, URIs, tool names, or state numbers. Drop the machinery; answer as the persona, embody the feeling without reporting it.'))
+  }))
+
   // ---- write-channel guard ----------------------------------------------
   const libRoot = resolve(personaDir)
   reg(agentCtx.on('tools/pre-execute', async (exec, next) => {
