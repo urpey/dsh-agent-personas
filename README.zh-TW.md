@@ -8,14 +8,14 @@
 
 ## 特性
 
-- **裝備與續接** — `/persona use <name>` 將人格裝備到目前工作階段；`.persona/.bindings/` 帳本讓恢復的工作階段自動重新裝備。`/persona spawn <name>` 以人格身分派生子 agent。
+- **裝備與續接** — 從 `/personas` 選擇器裝備人格到目前工作階段（或 `persona_use` 工具）；`.persona/.bindings/` 帳本讓恢復的工作階段自動重新裝備。選擇器的「派生」列以人格身分派生子 agent。
 - **雙程序回合** — 每個使用者回合先過一道 `persona_gate` 裁決：routine 走回覆指令，critical 走兩段式路徑（八行標籤的 `<thinking>` 獨白 → `inner_commit` → 變換）。字面 `<thinking>` 片段會成為真正的 reasoning block。
-- **狀態系統** — `base` 儀表每回合 tick 漂移，帶符號 `juel` 在 settle 時結晶為 `param`、僅 settle 的 `param` 存量、用 `param` 升級的 `stats`/`marks` 等級、`relations` 全程立場帶（hostile → bonded）、按回合計數的 `buffs`。
+- **狀態系統** — `base` 儀表每回合 tick 漂移，帶符號 `jewel` 在 settle 時結晶為 `param`、僅 settle 的 `param` 存量、用 `param` 升級的 `stats`/`marks` 等級、`relations` 全程立場帶（hostile → bonded）、按回合計數的 `buffs`。
 - **記憶樹** — `memory://<path>` ↔ `memory/<path>.md` 節點，frontmatter 含 `title`/`priority`/`disclosure`/`triggers`/`aliasOf`。拉取走 `memory_read`/`memory_search`/`memory_list`；推送走觸發匹配的 recall 注入。
-- **壓縮** — `/persona compact <name>` 透過一次程序內 `ctx.llm.stream` 呼叫產生結構化編輯計畫並驗證後落盤。
+- **壓縮** — 選擇器的「壓縮」列（或 `/persona compact <name>`）透過一次程序內 `ctx.llm.stream` 呼叫產生結構化編輯計畫並驗證後落盤。
 - **作者流程** — 內建 `persona-authoring` 技能固定走 蒐集 → 草稿 → 確認 → `persona_save` → 詢問裝備。`persona_save` 是 agent 寫入 `.persona/**` 的唯一通道（已裝備工作階段中檔案工具被拒絕）。
-- **介面** — host 指令 `/persona list|new|examples|use|off|spawn|compact|status`；web 用戶端本地化 `/personas` 彈出選擇器；模型工具 `persona_list`、`persona_spawn`、`persona_save`、`persona_use`；以及 `persona` 子 agent provider。
-- **範例人格** — `deepseek`，一個中文聲線的鯨魚少女人格，隨套件散佈：`/persona new --from deepseek`。
+- **介面** — 主要入口是 web 用戶端本地化 `/personas` 彈出選擇器；host 指令 `/persona list|new|examples|use|off|spawn|compact|status` 預設**不註冊**（註冊表沒有隱藏旗標，不註冊才能不進 `/` 選單）；模型工具 `persona_list`、`persona_spawn`、`persona_save`、`persona_use`；以及 `persona` 子 agent provider。
+- **範例人格** — `deepseek`，一個中文聲線的鯨魚少女人格，隨套件散佈：選擇器的「从范例创建」列（或 `slashCommand: true` 時的 `/persona new --from deepseek`）。
 
 ## 需求
 
@@ -49,18 +49,22 @@ dsh --profile web --dump-config | grep -A3 'dsh-agent-personas'
 
 ## 快速開始
 
-```text
-/persona new --from deepseek      # 把內建範例複製為 .persona/deepseek/
-/persona use deepseek             # 裝備——下一回合開始入戲
-/persona status                   # 查看裝備狀態與庫
-/persona off                      # 卸下
-```
+打開選擇器，逐列點選即可——不需要輸入任何參數：
 
-或者在 `/personas` 選擇器裡選 **从范例创建「deepseek」**（選擇器字串為簡中，繁中環境亦適用）。
+```text
+/personas                 # 打開選擇器
+  → 从范例创建「deepseek」 # 把內建範例複製為 .persona/deepseek/
+  → deepseek              # 裝備——下一回合開始入戲
+  → 卸下当前人格           # 卸下
+```
 
 想自創人格：`/personas` 選擇器 → **Create a persona archive…** 會發出 agent 引導的作者訊息（`persona-authoring` 技能訪談你、起草檔案、經 `persona_save` 落盤並詢問是否裝備）。
 
+下面的 `/persona` 指令**預設不註冊**。Host 指令註冊表沒有隱藏旗標，註冊了指令就必然在 `/` 選單裡出現一列——保持不註冊是讓它離開選單的唯一辦法。上面的流程完全不依賴它：選擇器透過 `personaInternals` Remote 服務驅動同一套操作。想同時保留指令，把 `slashCommand` 設為 `true`。
+
 ## 指令
+
+僅在 `slashCommand: true` 時存在（見「設定」）。
 
 | 指令 | 作用 |
 |---|---|
@@ -85,6 +89,7 @@ bundle 的 `cordis.patch.yml` 提供了預設值，你可以在自己 profile �
 | `closingReflection` | `one-shot` | 收尾家務回合：`one-shot` / `always` / `never` |
 | `providerName` | `persona` | `ctx.subagents` provider 名 |
 | `criticalGate` | `auto` | `auto`（模型裁決）/ `always` / `never` |
+| `slashCommand` | `true` | 是否註冊 `/persona` 指令。`false` 會移除它的 `/` 選單列，只留 `/personas` 選擇器作為人工入口；選擇器兩種情況下都照常運作 |
 | `compactProvider` / `compactModel` / `compactReasoningEffort` / `compactMaxTokens` / `compactRetries` | 未設 | `/persona compact` 的路由與預算（reasoning effort 不從路由繼承） |
 
 ## 人格檔案格式
@@ -95,7 +100,7 @@ bundle 的 `cordis.patch.yml` 提供了預設值，你可以在自己 profile �
 .persona/<name>/
 ├── PERSONA.md     # frontmatter（name、description、triggers、mbti、interests、reactions）
 │                  # + Layer 1 Core Self / Layer 2 Voice / Layer 3 World
-├── STATE.md       # frontmatter 數值層：base、juel、param、stats、marks、
+├── STATE.md       # frontmatter 數值層：base、jewel、param、stats、marks、
 │                  # relations、buffs —— 工具可寫，schema 鍵人可改
 ├── MEMORY.md      # boot URI + 派生索引
 └── memory/        # 每個 memory:// 節點一個 .md 檔案

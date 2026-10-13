@@ -43,7 +43,9 @@ function loadClient() {
  * @param root - workspace root the relative paths resolve against.
  * @param options - `failList` makes every listing answer a carrier failure;
  *   `noBinding` leaves the session unretained; `failPrompt` makes the kickoff
- *   prompt answer a business error.
+ *   prompt answer a business error; `replies` maps a `personaInternals` method
+ *   to the business reply the Host should answer with; `failRpc` fails the
+ *   carrier itself.
  */
 function mount(root, options = {}) {
   const calls = []
@@ -88,7 +90,8 @@ function mount(root, options = {}) {
     },
   }
 
-  const executed = []
+  const rpcCalls = []
+  const notices = []
   const submitted = []
   const contributions = []
   const commandUi = {
@@ -97,12 +100,19 @@ function mount(root, options = {}) {
     dismiss: () => {},
     popupFor: () => undefined,
   }
+  // The notice surface a landed operation reports through:
+  // `sessions.scope(id)` → `conversation.input.for(actx).notify(level, text)`.
+  const conversation = {
+    input: {
+      for: () => ({ notify: (level, text) => { notices.push({ level, text }) } }),
+    },
+  }
   const sessions = {
     binding: () => (options.noBinding === true ? undefined : ({
       session: {
-        command: async (line) => { executed.push(line); return { ok: true, value: { matched: true } } },
-        // The kickoff path goes through the session's prompt face, not its
-        // command face: record both so a test can prove which one ran.
+        // The kickoff path goes through the session's prompt face. The mutating
+        // rows deliberately do NOT touch the command face any more: `/persona`
+        // is unregistered by default, so a submitted line would be unknown.
         prompt: async (content, mode) => {
           submitted.push({ content, mode })
           if (options.failPrompt === true) return { ok: false, error: new Error('session is busy') }
@@ -110,6 +120,24 @@ function mount(root, options = {}) {
         },
       },
     })),
+    scope: () => ({ get: (name) => (name === 'conversation' ? conversation : undefined) }),
+  }
+  // The picker's Host channel. `replies` overrides a per-method business reply
+  // (`{ ok: false, text }` exercises the refusal path); `failRpc` fails the
+  // carrier itself.
+  const connection = {
+    rpc: {
+      async call(channel, endpoint, payload) {
+        rpcCalls.push({ channel, endpoint, payload })
+        if (options.failRpc === true) {
+          return { ok: false, error: { code: 'gateway/internal', message: 'carrier down' } }
+        }
+        const method = endpoint.slice('personaInternals/'.length)
+        const reply = options.replies?.[method]
+        if (reply !== undefined) return { ok: true, value: reply }
+        return { ok: true, value: { ok: true, text: `ran ${method}` } }
+      },
+    },
   }
   // The real client ctx exposes the workspace-files namespace under the FLAT
   // service key `remote.workspaceFiles`; there is no nested `remote` service to
@@ -117,7 +145,7 @@ function mount(root, options = {}) {
   // this harness able to catch a wrong lookup instead of hiding it, and asking
   // for a key nobody provides must fail loudly the way Cordis does — a silent
   // `undefined` is exactly how the 0-persona bug shipped.
-  const services = { locale, commandUi, sessions, 'remote.workspaceFiles': workspaceFiles }
+  const services = { locale, commandUi, sessions, connection, 'remote.workspaceFiles': workspaceFiles }
   const get = (name) => {
     if (!(name in services)) throw new Error(`cannot get property "${name}" without inject`)
     return services[name]
@@ -138,7 +166,11 @@ function mount(root, options = {}) {
     injects.includes('remote.workspaceFiles'),
     'the contribution must inject the flat remote.workspaceFiles service key',
   )
-  return { contribution: contributions[0], executed, submitted, calls, dictionaries }
+  assert.ok(
+    injects.includes('connection'),
+    'the contribution must inject connection: it is the picker\'s only Host channel now',
+  )
+  return { contribution: contributions[0], rpcCalls, notices, submitted, calls, dictionaries }
 }
 
 /** Build a workspace whose `.persona/` holds the given archives. */
@@ -259,25 +291,73 @@ test('picker degrades to the action rows when the library or the remote is absen
   assert.deepEqual(failed.map(row => row.id), ['action:status', 'action:off', 'action:new', 'action:newExample'])
 })
 
-test('selecting a persona runs the host command for it', async () => {
+test('selecting a persona runs the host operation for it, never a command line', async () => {
   const root = workspace({ alice: 'name: alice\ndescription: first' })
   const mounted = mount(root)
   const rows = await rowsOf(mounted)
 
   await mounted.contribution.ui.onSelect(rows.find(row => row.id === 'use:alice'), { sessionId: 'session-a' })
-  assert.deepEqual(mounted.executed, ['/persona use alice'])
+  assert.deepEqual(mounted.rpcCalls.map(call => call.endpoint), ['personaInternals/use'])
+  assert.equal(mounted.rpcCalls[0].channel, '/api')
+  // The `agent` parameter is a Host lookup: the browser sends the session id it
+  // already holds and the Gateway resolves the Agent from it.
+  assert.deepEqual(mounted.rpcCalls[0].payload, { args: { agentId: 'session-a', name: 'alice' } })
 
   await mounted.contribution.ui.onSelect(rows.find(row => row.id === 'action:off'), { sessionId: 'session-a' })
-  assert.deepEqual(mounted.executed, ['/persona use alice', '/persona off'])
+  assert.deepEqual(mounted.rpcCalls.map(call => call.endpoint), ['personaInternals/use', 'personaInternals/off'])
+  assert.deepEqual(mounted.rpcCalls[1].payload, { args: { agentId: 'session-a' } })
 
-  // The example row carries a fixed host line — no free text to collect.
+  // The example row carries a fixed argument — no free text to collect.
   await mounted.contribution.ui.onSelect(rows.find(row => row.id === 'action:newExample'), { sessionId: 'session-a' })
-  assert.deepEqual(mounted.executed, ['/persona use alice', '/persona off', '/persona new --from deepseek'])
+  assert.deepEqual(mounted.rpcCalls.map(call => call.endpoint), [
+    'personaInternals/use', 'personaInternals/off', 'personaInternals/newFromExample',
+  ])
+  assert.deepEqual(mounted.rpcCalls[2].payload, { args: { agentId: 'session-a', example: 'deepseek' } })
+
+  // A Remote call leaves no `command/run` flow node, so every landed operation
+  // reports itself to the composer instead.
+  assert.deepEqual(mounted.notices, [
+    { level: 'info', text: 'ran use' },
+    { level: 'info', text: 'ran off' },
+    { level: 'info', text: 'ran newFromExample' },
+  ])
 
   await assert.rejects(
     () => mounted.contribution.ui.onSelect({ id: 'unknown' }, { sessionId: 'session-a' }),
     /没有匹配的人格/,
   )
+})
+
+test('a refused operation surfaces the host text, and a carrier failure the carrier error', async () => {
+  const root = workspace({ alice: 'name: alice\ndescription: first' })
+  // A business refusal is data on the wire: `{ ok: false, text }`.
+  const refused = mount(root, { replies: { use: { ok: false, text: 'already equipped as "alice"' } } })
+  const refusedRows = await rowsOf(refused)
+  await assert.rejects(
+    () => refused.contribution.ui.onSelect(refusedRows.find(row => row.id === 'use:alice'), { sessionId: 'session-a' }),
+    /already equipped as "alice"/,
+  )
+  assert.deepEqual(refused.notices, [], 'a refusal is not a landed operation')
+
+  // A carrier failure never reaches the method at all.
+  const broken = mount(root, { failRpc: true })
+  const brokenRows = await rowsOf(broken)
+  await assert.rejects(
+    () => broken.contribution.ui.onSelect(brokenRows.find(row => row.id === 'use:alice'), { sessionId: 'session-a' }),
+    /carrier down/,
+  )
+  assert.deepEqual(broken.notices, [])
+})
+
+test('an unretained session refuses the call before it reaches the wire', async () => {
+  const root = workspace({ alice: 'name: alice\ndescription: first' })
+  const mounted = mount(root, { noBinding: true })
+  const rows = await rowsOf(mounted)
+  await assert.rejects(
+    () => mounted.contribution.ui.onSelect(rows.find(row => row.id === 'use:alice'), { sessionId: 'session-a' }),
+    /本会话尚未保留/,
+  )
+  assert.deepEqual(mounted.rpcCalls, [])
 })
 
 test('every persona offers its own spawn and compact without typing a name', async () => {
@@ -292,7 +372,11 @@ test('every persona offers its own spawn and compact without typing a name', asy
 
   await mounted.contribution.ui.onSelect(spawn, { sessionId: 'session-a' })
   await mounted.contribution.ui.onSelect(compact, { sessionId: 'session-a' })
-  assert.deepEqual(mounted.executed, ['/persona spawn bob', '/persona compact bob'])
+  assert.deepEqual(mounted.rpcCalls.map(call => call.endpoint), [
+    'personaInternals/spawn', 'personaInternals/compact',
+  ])
+  // The name travels as an argument, so nothing has to be typed.
+  assert.deepEqual(mounted.rpcCalls.map(call => call.payload.args.name), ['bob', 'bob'])
 })
 
 test('list and status are panel views, never flow-node commands', async () => {
@@ -314,9 +398,9 @@ test('list and status are panel views, never flow-node commands', async () => {
   assert.equal(rows.find(row => row.label === 'alice').badge, '已装备')
   assert.equal(rows.some(row => row.id === 'action:list'), false)
 
-  // Nothing the panel already shows is submitted as a command.
+  // Nothing the panel already shows is sent to the Host.
   await mounted.contribution.ui.onSelect(status, { sessionId: 'session-a' })
-  assert.deepEqual(mounted.executed, [])
+  assert.deepEqual(mounted.rpcCalls, [])
 })
 
 test('the create row hands the free-text flow to the agent instead of gating it', async () => {
@@ -330,9 +414,9 @@ test('the create row hands the free-text flow to the agent instead of gating it'
   assert.equal(create.detail, '由 agent 引导创建：提供要求或粘贴人设资料')
 
   // Picking it submits ONE queued kickoff message naming the authoring skill —
-  // never a host command line for a name nobody collected.
+  // never a Host call for a name nobody collected.
   await mounted.contribution.ui.onSelect(create, { sessionId: 'session-a' })
-  assert.deepEqual(mounted.executed, [])
+  assert.deepEqual(mounted.rpcCalls, [])
   assert.equal(mounted.submitted.length, 1)
   assert.equal(mounted.submitted[0].mode, 'queue')
   assert.deepEqual(mounted.submitted[0].content.map(part => part.type), ['text'])
@@ -341,9 +425,9 @@ test('the create row hands the free-text flow to the agent instead of gating it'
   assert.match(kickoff, /persona-authoring/)
   assert.match(kickoff, /persona_save/)
 
-  // The rows whose arguments are already known still execute for real.
+  // The rows whose arguments are already known still run for real.
   await mounted.contribution.ui.onSelect(rows.find(row => row.id === 'action:off'), { sessionId: 'session-a' })
-  assert.deepEqual(mounted.executed, ['/persona off'])
+  assert.deepEqual(mounted.rpcCalls.map(call => call.endpoint), ['personaInternals/off'])
 })
 
 test('a kickoff that cannot be submitted surfaces the failure instead of swallowing it', async () => {
@@ -356,7 +440,7 @@ test('a kickoff that cannot be submitted surfaces the failure instead of swallow
     () => unretained.contribution.ui.onSelect(create, { sessionId: 'session-a' }),
     /本会话尚未保留/,
   )
-  assert.deepEqual(unretained.executed, [])
+  assert.deepEqual(unretained.rpcCalls, [])
   assert.deepEqual(unretained.submitted, [])
 
   // A rejected prompt propagates the carrier's own error to the picker.
@@ -366,10 +450,10 @@ test('a kickoff that cannot be submitted surfaces the failure instead of swallow
     /session is busy/,
   )
   assert.equal(rejected.submitted.length, 1)
-  assert.deepEqual(rejected.executed, [])
+  assert.deepEqual(rejected.rpcCalls, [])
 })
 
-test('the picker copy no longer sends the user to the /persona new command line', async () => {
+test('the picker copy never sends the user to the hidden /persona command line', async () => {
   const mounted = mount(workspace({}))
   const labels = mounted.contribution.ui.searchLabels()
   // Assert the PROPERTY, not a copy of the string. Hard-coding the value here
@@ -384,6 +468,14 @@ test('the picker copy no longer sends the user to the /persona new command line'
   const dicts = mounted.dictionaries.get('persona')
   for (const key of [...Object.keys(dicts.zh), ...Object.keys(dicts.en)]) {
     assert.equal(key.startsWith('gate.new.'), false, `stale dictionary key: ${key}`)
+  }
+  // No user-facing copy may point at the command at all: it is unregistered by
+  // default, so a reader who followed the pointer would type an unknown command.
+  // `/personas` (the picker itself) is fine — hence the lookahead.
+  for (const [locale, dict] of Object.entries(dicts)) {
+    for (const [key, value] of Object.entries(dict)) {
+      assert.doesNotMatch(value, /\/persona(?!s)/u, `${locale}.${key} points at the hidden command`)
+    }
   }
 })
 

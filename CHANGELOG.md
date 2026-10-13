@@ -13,16 +13,22 @@ version is published.
 
 - Host plugin `agent-personas`: mounts a persistent persona surface on any
   equipped agent — three-layer `PERSONA.md` profile, six-layer integer state
-  system (`base`/`juel`/`param`/`stats`/`marks`/`relations`/`buffs`), and a
+  system (`base`/`jewel`/`param`/`stats`/`marks`/`relations`/`buffs`), and a
   `memory://` URI memory tree under `.persona/<name>/`.
 - Dual-process turns: a `persona_gate` verdict every user turn routes to a
   routine reply directive or a two-stage critical path (labeled `<thinking>`
   monologue → `inner_commit` → transform); literal `<thinking>` spans become
   real reasoning blocks.
-- `/persona` commands: `list`, `new <name> [--from <example>]`, `examples`,
-  `use`, `off`, `spawn`, `compact`, `status`.
 - `/personas` client picker (web) with per-persona actions, localized zh/en
-  rows, and an equipped badge.
+  rows, and an equipped badge — the primary human entry point. It drives the
+  Host through the `personaInternals` Remote service, which runs the same
+  operation bodies the command parses.
+- `/persona` commands: `list`, `new <name> [--from <example>]`, `examples`,
+  `use`, `off`, `spawn`, `compact`, `status` — **not registered by default**
+  (`slashCommand: false`). The Host command registry has no hidden flag and a
+  registered command always becomes a `/` menu row, so staying unregistered is
+  the only way to keep it off the menu; set `slashCommand: true` to restore it
+  alongside the picker.
 - Model-facing tools: `persona_list`, `persona_spawn`, `persona_save`,
   `persona_use`, plus the `persona` subagent provider wrapping `spawn`.
 - `persona-authoring` skill: fixed collect → draft → confirm → `persona_save`

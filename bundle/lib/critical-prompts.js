@@ -10,7 +10,7 @@
  * (`stageTwoPrompt`).
  *
  * The monologue is parameterized on this system's knobs: MBTI profile + live
- * STATE (juel peaks, base gauges, relations, buffs) instead of a trait model
+ * STATE (jewel peaks, base gauges, relations, buffs) instead of a trait model
  * thresholds. The reply carries the
  * monologue's feeling through Layer 2 voice, which is always in the prompt —
  * so no second call is needed to apply the style matrix.
@@ -36,14 +36,14 @@ const MBTI_HINTS = {
  * them.
  */
 export const MBTI_REACTIONS = {
-  E: { praise: { juel: { joy: 1.2 } }, criticism: { juel: { anger: 1.1 } } },
-  I: { praise: { juel: { joy: 1.2 } }, criticism: { juel: { shame: 1.3 } } },
+  E: { praise: { jewel: { joy: 1.2 } }, criticism: { jewel: { anger: 1.1 } } },
+  I: { praise: { jewel: { joy: 1.2 } }, criticism: { jewel: { shame: 1.3 } } },
   S: { praise: { base: { energy: 1.1 } } },
-  N: { praise: { juel: { joy: 1.1 } }, criticism: { juel: { shame: 1.1 } } },
-  T: { praise: { juel: { joy: 0.6 } }, criticism: { juel: { anger: 0.7, shame: 0.4 } } },
-  F: { praise: { juel: { joy: 1.5 }, relations: { user: 1.2 } }, criticism: { juel: { shame: 1.6 } } },
-  J: { criticism: { juel: { anger: 1.2 } } },
-  P: { criticism: { juel: { anger: 0.7 } } },
+  N: { praise: { jewel: { joy: 1.1 } }, criticism: { jewel: { shame: 1.1 } } },
+  T: { praise: { jewel: { joy: 0.6 } }, criticism: { jewel: { anger: 0.7, shame: 0.4 } } },
+  F: { praise: { jewel: { joy: 1.5 }, relations: { user: 1.2 } }, criticism: { jewel: { shame: 1.6 } } },
+  J: { criticism: { jewel: { anger: 1.2 } } },
+  P: { criticism: { jewel: { anger: 0.7 } } },
 }
 
 /**
@@ -83,7 +83,7 @@ export const PARAM_NOTABLE = 20
  * A field name outside these maps is persona-coined: its meaning lives in
  * that persona's Layer 3 prose and renders here as a bare number.
  */
-export const JUEL_MEANINGS = {
+export const JEWEL_MEANINGS = {
   joy: 'sweetness rising',
   anger: 'irritation loading',
   shame: 'fluster surfacing',
@@ -108,7 +108,7 @@ export function carriedParam(state = {}, min = PARAM_NOTABLE, limit = 3) {
 }
 
 /** Layers a reaction profile may address — the same three state_delta writes. */
-export const REACTION_LAYERS = ['juel', 'base', 'relations']
+export const REACTION_LAYERS = ['jewel', 'base', 'relations']
 
 /** Validate a declared reactions table; throws naming the offending path. */
 export function assertReactions(declared) {
@@ -122,7 +122,7 @@ export function assertReactions(declared) {
     }
     for (const [layer, fields] of Object.entries(profile)) {
       if (!REACTION_LAYERS.includes(layer)) {
-        throw new Error(`reactions.${event}.${layer} is not a writable layer (juel|base|relations)`)
+        throw new Error(`reactions.${event}.${layer} is not a writable layer (jewel|base|relations)`)
       }
       if (!fields || typeof fields !== 'object' || Array.isArray(fields)) {
         throw new Error(`reactions.${event}.${layer} must be a map of field → multiplier`)
@@ -191,20 +191,20 @@ function mbtiRules(mbti = '') {
 
 function stateRules(state = {}) {
   const rules = []
-  const juelEntries = Object.entries(state.juel ?? {})
+  const jewelEntries = Object.entries(state.jewel ?? {})
     .map(([k, p]) => [k, Number(p?.value) || 0])
-  const peaks = juelEntries
+  const peaks = jewelEntries
     .filter(([, v]) => v >= 15)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 2)
   for (const [k, v] of peaks) {
-    const hint = JUEL_MEANINGS[k] ? ` (${JUEL_MEANINGS[k]})` : ''
+    const hint = JEWEL_MEANINGS[k] ? ` (${JEWEL_MEANINGS[k]})` : ''
     rules.push(`- ${k}${hint} is running high (${v}) — it colors every thought this turn`)
   }
-  // Banked amends: a negative juel is compensation that will burn standing on
+  // Banked amends: a negative jewel is compensation that will burn standing on
   // settle — the reply should sound like the ledger is being paid down, not
   // like the wound is fresh again.
-  for (const [k, v] of juelEntries.filter(([, v]) => v <= -15).sort((a, b) => a[1] - b[1]).slice(0, 2)) {
+  for (const [k, v] of jewelEntries.filter(([, v]) => v <= -15).sort((a, b) => a[1] - b[1]).slice(0, 2)) {
     rules.push(`- ${k} is banked low (${v}) — amends/counterweight; settle pays it against standing`)
   }
   for (const [k, f] of Object.entries(state.base ?? {})) {
@@ -230,14 +230,14 @@ function stateRules(state = {}) {
  * Deterministic gate inputs, rendered as `- ` lines. Cheap facts only — the
  * model reads the input itself; code must not score it. Two of the lines are
  * interpretations rather than facts — the relation stance band and the carried
- * `juel` flag — because a bare number the model has no band for is a number it
+ * `jewel` flag — because a bare number the model has no band for is a number it
  * does not act on.
  *
  * Every access is guarded (`?? {}`, `|| 0`) so a malformed state file yields a
  * thinner signal line instead of breaking the turn. The first-contact line is
  * always present, so this never returns '' — the caller may show it verbatim.
  *
- * @param opts.state - loaded STATE.md data (relations/juel/param/buffs)
+ * @param opts.state - loaded STATE.md data (relations/jewel/param/buffs)
  * @param opts.meta  - PERSONA.md frontmatter (interests)
  * @param opts.text  - this turn's newest real user input, truncated for display
  */
@@ -261,13 +261,13 @@ export function signalsLine({ state = {}, meta = {}, text = '' } = {}) {
   // 30 is the same number the retired table used as a verdict threshold; here it
   // only decides what is worth *showing* — the model reads the pressure and
   // rules on it itself.
-  const hot = Object.entries(state.juel ?? {})
+  const hot = Object.entries(state.jewel ?? {})
     .map(([k, p]) => [k, Number(p?.value) || 0])
     .filter(([, v]) => v >= 30)
     .sort((a, b) => b[1] - a[1])
-  if (hot.length) lines.push(`- ${hot.map(([k, v]) => `${k} = ${v}${JUEL_MEANINGS[k] ? ` (${JUEL_MEANINGS[k]})` : ''}`).join(', ')} — already hot`)
+  if (hot.length) lines.push(`- ${hot.map(([k, v]) => `${k} = ${v}${JEWEL_MEANINGS[k] ? ` (${JEWEL_MEANINGS[k]})` : ''}`).join(', ')} — already hot`)
   // Crystallized weight, flagged separately from mood: settled standing
-  // outlives the juel that produced it, and it is invisible to every other
+  // outlives the jewel that produced it, and it is invisible to every other
   // surface.
   const carried = carriedParam(state)
   if (carried.length) lines.push(`- carried (standing, not this turn's mood): ${carried.map(([k, v]) => `${k} = ${v}${PARAM_MEANINGS[k] ? ` — ${PARAM_MEANINGS[k]}` : ''}`).join(', ')}`)
@@ -304,7 +304,7 @@ Before you rule, run the quick pass — perceive, aim, expect:
 
 Your only output this step is ONE call — no reply text, no <thinking> yet:
 
-  persona_gate({ critical: true|false, perceive: "<what is happening>", aim: "<what this reply must achieve>", reason: "<why this verdict, in your own words>", delta: { juel: { anger: +8 }, event: "insult" } })
+  persona_gate({ critical: true|false, perceive: "<what is happening>", aim: "<what this reply must achieve>", reason: "<why this verdict, in your own words>", delta: { jewel: { anger: +8 }, event: "insult" } })
 
 \`perceive\` and \`aim\` are the quick pass, written down — one or two sentences
 each, no expansion into a monologue. They are recorded, and on a routine turn
@@ -373,7 +373,7 @@ Write the block from what is already in your persona context, your memory index,
 
 The block opens with eight labeled lines — STATE plus the seven aspects, in this
 order — then expands freely if the turn is loaded:
-STATE: copy the Current state block from your persona context VERBATIM (base, juel, relations, active buffs)
+STATE: copy the Current state block from your persona context VERBATIM (base, jewel, relations, active buffs)
 PERCEIVE: what is actually happening right now — the literal input and what it carries; who is speaking; what it touches (values, wounds, stored memories)
 AIM: what this reply needs to achieve — what you want out of this exchange
 WANT: the deeper want under it — the hunger, need, or fear driving this, whether or not it is said

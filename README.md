@@ -8,14 +8,14 @@ Equip a persona and the agent gains an identity, a voice, a mood system that dri
 
 ## Features
 
-- **Equip & resume** — `/persona use <name>` mounts the persona on the session; a `.persona/.bindings/` ledger re-equips resumed sessions automatically. `/persona spawn <name>` runs a child agent already in character.
+- **Equip & resume** — the `/personas` picker mounts a persona on the session (or use the `persona_use` tool); a `.persona/.bindings/` ledger re-equips resumed sessions automatically. The picker's spawn row runs a child agent already in character.
 - **Dual-process turns** — every user turn passes a `persona_gate` verdict: routine turns get a reply directive, critical turns get a two-stage path (labeled `<thinking>` monologue → `inner_commit` → transform). Literal `<thinking>` spans become real reasoning blocks.
-- **State system** — `base` gauges with per-turn tick drift, signed `juel` that crystallizes into `param` at settle, settle-only `param` standing, `stats`/`marks` levels bought by `param`, `relations` with total stance bands (hostile → bonded), and turn-counted `buffs`.
+- **State system** — `base` gauges with per-turn tick drift, signed `jewel` that crystallizes into `param` at settle, settle-only `param` standing, `stats`/`marks` levels bought by `param`, `relations` with total stance bands (hostile → bonded), and turn-counted `buffs`.
 - **Memory tree** — `memory://<path>` ↔ `memory/<path>.md` nodes with `title`/`priority`/`disclosure`/`triggers`/`aliasOf` frontmatter. Pull via `memory_read`/`memory_search`/`memory_list`; push via trigger-matched recall injections.
-- **Compaction** — `/persona compact <name>` tidies the memory tree through one in-process `ctx.llm.stream` call and a validated structured-output edit plan.
+- **Compaction** — the picker's compact row (or `/persona compact <name>`) tidies the memory tree through one in-process `ctx.llm.stream` call and a validated structured-output edit plan.
 - **Authoring** — the bundled `persona-authoring` skill runs a fixed collect → draft → confirm → `persona_save` → equip flow. `persona_save` is the only agent write channel into `.persona/**` (file tools are denied there in equipped sessions).
-- **Surfaces** — host commands `/persona list|new|examples|use|off|spawn|compact|status`; a localized `/personas` popup picker on the web client; model tools `persona_list`, `persona_spawn`, `persona_save`, `persona_use`; a `persona` subagent provider.
-- **Example persona** — `deepseek`, a whale-girl persona (Chinese voice), ships inside the bundle: `/persona new --from deepseek`.
+- **Surfaces** — a localized `/personas` popup picker on the web client is the primary entry point; host commands `/persona list|new|examples|use|off|spawn|compact|status` exist but are **not registered by default** (the registry has no hidden flag, so unregistered is the only way off the `/` menu); model tools `persona_list`, `persona_spawn`, `persona_save`, `persona_use`; a `persona` subagent provider.
+- **Example persona** — `deepseek`, a whale-girl persona (Chinese voice), ships inside the bundle: the picker's "Create the example" row (or `/persona new --from deepseek` with `slashCommand: true`).
 
 ## Requirements
 
@@ -49,18 +49,22 @@ You should see a `# == dsh-agent-personas` layer containing the `agent-personas`
 
 ## Quick start
 
-```text
-/persona new --from deepseek      # copy the bundled example into .persona/deepseek/
-/persona use deepseek             # equip it — next turn runs in character
-/persona status                   # show the equip + library
-/persona off                      # unequip
-```
+Open the picker and pick rows — nothing has to be typed:
 
-Or pick **从范例创建「deepseek」 / Create the "deepseek" example** in the `/personas` picker.
+```text
+/personas                          # open the picker
+  → Create the "deepseek" example  # copies the bundled example into .persona/deepseek/
+  → deepseek                       # equip it — next turn runs in character
+  → Unequip the current persona    # unequip
+```
 
 To author your own: `/personas` picker → **Create a persona archive…** sends an agent-guided authoring message (the `persona-authoring` skill interviews you, drafts the archive, saves it through `persona_save`, and offers to equip).
 
+The `/persona` command below is **not registered by default**. The Host command registry has no hidden flag, so a registered command always becomes a `/` menu row — staying unregistered is the only way to keep it off the menu. Everything above works without it, because the picker drives the same operations over the `personaInternals` Remote service. Set `slashCommand: true` to restore the command alongside the picker.
+
 ## Commands
+
+Only present when `slashCommand: true` (see Configuration).
 
 | Command | Effect |
 |---|---|
@@ -85,6 +89,7 @@ The bundle's `cordis.patch.yml` sets defaults you can override in your profile's
 | `closingReflection` | `one-shot` | `one-shot` / `always` / `never` closing housekeeping turn |
 | `providerName` | `persona` | `ctx.subagents` provider name |
 | `criticalGate` | `auto` | `auto` (model rules) / `always` / `never` |
+| `slashCommand` | `true` | register the `/persona` command. `false` removes its `/` menu row and leaves the `/personas` picker as the only human entry point; the picker is unaffected either way |
 | `compactProvider` / `compactModel` / `compactReasoningEffort` / `compactMaxTokens` / `compactRetries` | unset | `/persona compact` routing and budget (reasoning effort is NOT inherited from the route) |
 
 ## Persona file format
@@ -95,7 +100,7 @@ A persona is a directory of plain markdown:
 .persona/<name>/
 ├── PERSONA.md     # frontmatter (name, description, triggers, mbti, interests, reactions)
 │                  # + Layer 1 Core Self / Layer 2 Voice / Layer 3 World
-├── STATE.md       # frontmatter numeric layers: base, juel, param, stats, marks,
+├── STATE.md       # frontmatter numeric layers: base, jewel, param, stats, marks,
 │                  # relations, buffs — tool-writable, schema keys human-editable
 ├── MEMORY.md      # boot URIs + derived index
 └── memory/        # one .md file per memory:// node

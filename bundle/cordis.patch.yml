@@ -8,6 +8,13 @@
         providerName: 'persona'
         # auto: you rule the verdict per turn | always: every turn critical | never: every turn routine
         criticalGate: 'auto'
+        # false keeps /persona OUT of the Host command registry, which is the only
+        # way to remove its `/` menu row — the registry has no hidden flag, and a
+        # registered command always becomes a row. The `/personas` picker is
+        # unaffected: it drives the same operations through the `personaInternals`
+        # Remote service (bundle/lib/remote.js). Set true to restore the command
+        # alongside the picker.
+        slashCommand: false
         # /persona compact — all optional, unset = the lib defaults below.
         # compactProvider: ~           # pin a route (needs compactModel too)
         # compactModel: ~              # e.g. a flash-class model for speed

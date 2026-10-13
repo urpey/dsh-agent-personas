@@ -12,7 +12,7 @@ The `dsh-agent-personas` plugin bundle gives equipped agents a persistent person
     <sessionId>.jsonl   # one line per verdict: { at, turn, step, verdict, reason, signals }
   <name>/
     PERSONA.md        # identity + voice (created once by persona_save; humans edit after)
-    STATE.md          # layered numeric state, signed juel→param model (tools only; see below)
+    STATE.md          # layered numeric state, signed jewel→param model (tools only; see below)
     MEMORY.md         # boot URI list + memory index (tools only)
     memory/           # URI-addressed tree; one .md per node
       user/preferences.md      ↔ memory://user/preferences
@@ -29,8 +29,8 @@ triggers: [names, aliases]
 mbti: INFP          # tunes the inner monologue + seeds reaction defaults
 interests: [数据库]
 reactions:          # optional; overrides the MBTI defaults per event layer
-  praise: { juel: { joy: 1.5 }, base: { satiety: 0.3 } }
-  criticism: { juel: { shame: 1.8 } }
+  praise: { jewel: { joy: 1.5 }, base: { satiety: 0.3 } }
+  criticism: { jewel: { shame: 1.8 } }
 ---
 
 ## Layer 1 · Core Self
@@ -48,7 +48,7 @@ reactions:          # optional; overrides the MBTI defaults per event layer
 Declares which STATE.md fields exist and their meaning; values live in STATE.md.
 ```
 
-## STATE.md (layered numeric system, signed juel→param model)
+## STATE.md (layered numeric system, signed jewel→param model)
 
 Frontmatter-only data; free-text notes in the body.
 
@@ -60,12 +60,12 @@ base:
   energy: { max: 100, value: 80, tick: -1 }
   focus:  { max: 100, value: 60 }
 
-# Layer 1 · JUEL — in-session emotion water (signed −100..∞)
+# Layer 1 · JEWEL — in-session emotion water (signed −100..∞)
 # Positive balance crystallizes into param at settle; a NEGATIVE balance is
 # banked amends that burns the emitted param back down (param floors at 0).
 # emit → which param it settles into; per → points per unit;
 # decay → % of remainder kept after settle (0–100, applied toward zero)
-juel:
+jewel:
   joy:     { emit: affection, per: 50, decay: 10, value: 0 }
   anger:   { emit: defiance,  per: 50, decay: 15, value: 0 }
   shame:   { emit: intimacy,  per: 25, decay: 5,  value: 0 }
@@ -88,7 +88,7 @@ marks:              # imprints 0–15
 relations:
   lead: { value: 0 }
 
-# Buffs — temporary deltas applied on top of base (or juel) values
+# Buffs — temporary deltas applied on top of base (or jewel) values
 # duration counts turns; null = persistent
 buffs:
   - { name: caffeine, domain: physical, duration: 4, deltas: { energy: +15, focus: +10 } }
@@ -108,7 +108,7 @@ not general YAML):
   put the comment after the closing bracket. `#` inside quotes is literal.
 - Flow collections must stay on one line; a line that can't be parsed throws
   instead of degrading into a silent string. `loadState` also validates layer
-  shapes (entries are maps, `juel.*.emit` non-empty, `param`/numeric fields
+  shapes (entries are maps, `jewel.*.emit` non-empty, `param`/numeric fields
   numeric, `buffs` an array) so a hand-edit that drifts fails at load, not
   mid-write after schema keys were already lost.
 
@@ -137,14 +137,14 @@ number — direct tooling, tests — the tick applies immediately.
 
 ```yaml
 reactions:
-  praise: { juel: { joy: 1.5 }, base: { satiety: 0.3 } }
+  praise: { jewel: { joy: 1.5 }, base: { satiety: 0.3 } }
 ```
 
-- Shape: `event → { juel|base|relations: { field: multiplier } }`. Multiplier
+- Shape: `event → { jewel|base|relations: { field: multiplier } }`. Multiplier
   scales the magnitude band, not a fixed value; `0` and negatives are rejected.
 - **MBTI seeds it**: each declared letter contributes field+multiplier defaults
   (`F` amplifies `joy`/`shame` and touches `relations`, `T` dampens affect).
-  Letters compound when they reach the same field (INFP `praise.juel.joy` =
+  Letters compound when they reach the same field (INFP `praise.jewel.joy` =
   I × N × F). A declared event *layer* replaces the merged layer wholesale — the
   declaration wins outright, so writing one field takes over that event.
 - **Enforcement is advisory (L2)**: `state_delta` takes an optional `event`. After
@@ -171,10 +171,10 @@ reactions:
 | PERSONA.md — **new** archive | `persona_save` (agent, after the human confirms the draft) | created once at authoring time; the human's confirmation in conversation is what delegates the keystroke |
 | PERSONA.md — **existing** archive | humans only | hand edit; no tool rewrites a live profile — `persona_save` refuses an existing name, and the currently equipped archive outright |
 | STATE.md / MEMORY.md / `memory/**.md` — **new** archive | `persona_save` | same one-shot call: validated whole-archive before anything is written; an omitted STATE.md/MEMORY.md is filled from `bundle/templates/` |
-| STATE.md `base`/`juel`/`relations` values | `state_delta` tool, or the `delta` field of the `persona_gate` call | integer deltas; base 0–max, juel −100..∞ (negative = banked amends), relations −100..+100; optional `event` calibrates against the reaction profile |
+| STATE.md `base`/`jewel`/`relations` values | `state_delta` tool, or the `delta` field of the `persona_gate` call | integer deltas; base 0–max, jewel −100..∞ (negative = banked amends), relations −100..+100; optional `event` calibrates against the reaction profile |
 | STATE.md `base.*.tick` | humans only | schema key; per-turn drift applied by the turn hook, never by tools |
 | STATE.md `buffs` | `buff_apply` / `buff_clear` tools | same-name buff refreshes; `duration` decrements per turn |
-| STATE.md `stats`/`marks`/`param`/field schema | `state_settle` only | juel → param (positive crystallizes, negative burns standing down) → level-ups; no direct tool write |
+| STATE.md `stats`/`marks`/`param`/field schema | `state_settle` only | jewel → param (positive crystallizes, negative burns standing down) → level-ups; no direct tool write |
 | STATE.md body notes | `state_update` tool | append-only |
 | PERSONA.md `reactions` | `persona_save` at authoring time, humans after | declared in the same human-owned file as `mbti`; MBTI letters seed the defaults |
 | memory/**.md | `memory_*` tools | URI tree + frontmatter |
@@ -196,17 +196,17 @@ The flow the model follows is fixed by the `persona-authoring` skill (`bundle/sk
 ## Settle algorithm (`state_settle` / turn-end when configured)
 
 ```
-per juel field j:
+per jewel field j:
   moved     = trunc(j.value / j.per)          # signed: ≥0 crystallizes, <0 burns
   param[j.emit] = max(0, param[j.emit] + moved)
   remainder = j.value − moved·per             # keeps the sign
   j.value   = remainder moved toward zero by decay/100
 per stats/marks entry (in declared order, max +1 level per settle):
   if level < 15 and param satisfies every requires key → deduct, level++
-returns { juelDelta, paramMoved, levelUps, param }
+returns { jewelDelta, paramMoved, levelUps, param }
 ```
 
-A negative `juel` balance is **banked amends**: `Math.trunc` keeps the sign, so
+A negative `jewel` balance is **banked amends**: `Math.trunc` keeps the sign, so
 `anger = −130` at `per: 100` burns 1 `defiance` and leaves `−30` to decay.
 `param` floors at 0 — goodwill past zero is spent, never a debt. `decay` is the
 percentage of the leftover remainder that survives the settle, applied toward
@@ -215,7 +215,7 @@ settle never grows an accumulator — the leftover only shrinks.
 
 Cadence: `decay` fires **once per settle, not per turn** — settles happen at
 chapter end (`state_settle` by the model, or the closing-reflection housekeeping
-turn for one-shot/`always` sessions). Between settles a juel balance does not
+turn for one-shot/`always` sessions). Between settles a jewel balance does not
 drift on its own; the only per-turn clock lives on `base.*.tick`.
 
 Delta magnitude guidance lives in `bundle/prompts/protocol.md`: ±1–5 nudge, ±5–15 notable, ±15–30 significant, ±30–50 severe.
@@ -230,9 +230,9 @@ carry the interpretation, all rendered from one owner (`relationStance` /
 |---|---|---|
 | `base.*` | `value/max ≤ 0.3` | "`energy` is low (20/100) — thoughts run shorter, flatter, tireder" (stage-1 tuning) |
 | `base.*` | `value/max ≥ 0.8` | full — the ease that resource buys |
-| `juel.*` | `≥ 15` | "`anger` is running high (40) — it colors every thought this turn" (stage-1 tuning) |
-| `juel.*` | `≤ −15` | "`anger` is banked low (−30) — amends/counterweight; settle pays it against standing" (stage-1 tuning) |
-| `juel.*` | `≥ 30` | "`anger` = 40 — already hot" (gate signals) |
+| `jewel.*` | `≥ 15` | "`anger` is running high (40) — it colors every thought this turn" (stage-1 tuning) |
+| `jewel.*` | `≤ −15` | "`anger` is banked low (−30) — amends/counterweight; settle pays it against standing" (stage-1 tuning) |
+| `jewel.*` | `≥ 30` | "`anger` = 40 — already hot" (gate signals) |
 | `relations.*` | `≤ −30` | `hostile — suspicion first` |
 | `relations.*` | `−29..−1` | `cold — cooling; no warmth volunteered` |
 | `relations.*` | `0..+29` | `unbonded — no standing yet — do not presume closeness` |
@@ -265,8 +265,8 @@ nodes.
 `param` is deliberately labelled as standing wherever it is rendered — in the
 state block (`param (standing, settle-only): defiance×60`) and in the gate
 signals. It is crystallized history, not a mood: a kept `defiance` outlives the
-`juel.anger` that produced it and moves only at settle — positive juel adds to
-it, a banked negative juel burns it back down, and `state_settle` level-ups
+`jewel.anger` that produced it and moves only at settle — positive jewel adds to
+it, a banked negative jewel burns it back down, and `state_settle` level-ups
 spend it — so a large balance has to shape the baseline rather than the current
 temper. Before this, `param` was rendered in the state block and read by no rule
 anywhere.
@@ -285,7 +285,7 @@ Prompt sections injected per equipped agent (agent-scoped, in assembly order):
 
 | Block | Content |
 |---|---|
-| `## Current state` | Rendered STATE summary — base/max, juel, param standing, relations, active buffs. Internal dashboard only: the protocol forbids speaking numbers/stat names in visible text; state shapes tone, not content. |
+| `## Current state` | Rendered STATE summary — base/max, jewel, param standing, relations, active buffs. Internal dashboard only: the protocol forbids speaking numbers/stat names in visible text; state shapes tone, not content. |
 | boot nodes | MEMORY.md `Boot URIs` expanded to full node bodies. |
 | `## Memory index` | Compact catalog: `- uri (pN · title [· alias→x]) — disclosure [triggers: a, b]`. Capped at 30 rows by priority; overflow reachable via `memory_search`. |
 
@@ -304,7 +304,7 @@ Turn hooks (`agent/pre-step`, `agent/turn-stopping`):
 
 Dual-process protocol (`prompts/protocol.md`): the gate is a verdict the model rules, and the turn gains a decision step to carry it.
 
-- **Step 1 — the instruction.** `gateInstruction()` injects `[persona gate]`: the imperative, the forced-mode sentence when `criticalGate` is `always`/`never`, the ledger sentence for `delta`, the quick-pass block, and a `## Signals` block — speaker known (with relation values) or first contact, one stance line per relation, declared `interests`, juel fields at or above 30, carried `param` at or above 20, active buffs, and the input truncated to 160 chars. It is the last thing in the step input, after the persona context block. The same signals string is what the route log records.
+- **Step 1 — the instruction.** `gateInstruction()` injects `[persona gate]`: the imperative, the forced-mode sentence when `criticalGate` is `always`/`never`, the ledger sentence for `delta`, the quick-pass block, and a `## Signals` block — speaker known (with relation values) or first contact, one stance line per relation, declared `interests`, jewel fields at or above 30, carried `param` at or above 20, active buffs, and the input truncated to 160 chars. It is the last thing in the step input, after the persona context block. The same signals string is what the route log records.
 - **The quick pass.** The instruction asks for `PERCEIVE` (what is happening in this input), `AIM` (what the reply must achieve), and `EXPECT` (what a reflex answer would land as — an expected miss is the strongest loaded-turn signal), then the verdict. `perceive`/`aim` are optional string arguments recorded in the route log when written; `EXPECT` is a judgement aid only and is never an argument. On a routine turn the quick pass *is* the turn's thinking; on a critical turn it is a sketch the monologue deepens and may overrule. Both are written in the same call as the verdict, so the model cannot know its own ruling while writing them — the shape is identical on every path.
 - **The verdict.** The model's only output on that step is `persona_gate({ critical, perceive?, aim?, reason?, delta? })`. The tool holds no criteria and makes no judgment: it records the verdict and returns a one-line acknowledgement. `reason` is the model's own words for why the turn is loaded, quoted into the stage-1 directive. `delta` is the turn's ledger entry — applied through the same `applyDelta` channel as `state_delta` (calibration notice and all, appended to the acknowledgement), applied *before* the state is loaded for the directive so the monologue's pressure lines already include what just landed, and recorded in the route log as the `changed` list. A delta that names no field is not an entry (`hasDeltaFields`), so an empty object can never rewrite STATE.md to record nothing; a malformed one degrades to a `delta not applied — <reason>` notice instead of taking the verdict down with it.
 - **Step 2 — the directive.** The directive the verdict owes is injected once, at the next step: `REPLY_DIRECTIVE` (`[persona reply]`) for routine, or `stageOnePrompt()` (`[persona stage 1 of 2]`) for critical. The critical path keeps the staged shape: step 2 emits only the `<thinking>…</thinking>` monologue and calls `inner_commit`; the tool returns the stage-2 transform directive, and step 3 produces the reply. The monologue is the deep pass — `STATE:` (verbatim copy from the context block) plus the seven aspects in canonical order: `PERCEIVE:`, `AIM:`, `WANT:`, `WEIGH:`, `EXPECT:`, `CHOICE:`, `REASON:`. The retired `TRIGGERS:`/`REFUSAL:`/`VOICE:` lines are absorbed rather than kept: triggers live under `PERCEIVE`, the refusal under `WEIGH`, tone and length under `CHOICE`. Staging is structural: the monologue cannot be skipped, and the transform gets its own directive. The monologue text itself rides the `inner_commit` result — request history strips synthetic reasoning before the next step, so without it the transform would have nothing to transform (see "thinking extraction" below).
@@ -346,8 +346,8 @@ Route log (gate audit): every verdict appends one JSON line to `.persona/.routes
 
 - The gate is model judgment with no deterministic floor: a loaded turn ruled routine is visible only in the route log, after the fact.
 - Per-turn state recording is *carried*, not *enforced*: the gate call is the one output the turn structure forces, and `delta` rides it, but the model can still omit it. Omission is a real answer (a turn that moved nothing) and is logged as `verdict: 'no-delta'` — count it in `.persona/.routes/` rather than expecting a guarantee. A model that omits every turn is a prompt/calibration problem the log now makes visible; code never fabricates a delta.
-- The stance bands, the carried-`param` threshold, and the standard-field meanings (`JUEL_MEANINGS`/`PARAM_MEANINGS` for joy/anger/shame/fear/fatigue and affection/defiance/intimacy/wariness/edginess) are code-owned and identical for every persona (`bundle/lib/critical-prompts.js`). Standard fields need no Layer 3 meaning declaration — the meaning rides the rendered signal/rule lines. Per-persona band text was deliberately left out of the STATE.md schema, so a persona that wants different wording for its own relations edits prose, not bands. If per-persona bands become necessary, extend the schema — do not add a second band table beside `RELATION_BANDS`.
-- `/persona` command cards don't render in a brand-new session until the first message sends: DSH's chat shell hides the transcript while `conversationPhase === 'blank'` (`activeTargets` requires a non-command chat node; `promptAttempted` flips on first submit). Harness-side behavior, same for all host commands.
+- The stance bands, the carried-`param` threshold, and the standard-field meanings (`JEWEL_MEANINGS`/`PARAM_MEANINGS` for joy/anger/shame/fear/fatigue and affection/defiance/intimacy/wariness/edginess) are code-owned and identical for every persona (`bundle/lib/critical-prompts.js`). Standard fields need no Layer 3 meaning declaration — the meaning rides the rendered signal/rule lines. Per-persona band text was deliberately left out of the STATE.md schema, so a persona that wants different wording for its own relations edits prose, not bands. If per-persona bands become necessary, extend the schema — do not add a second band table beside `RELATION_BANDS`.
+- `/persona` command cards don't render in a brand-new session until the first message sends: DSH's chat shell hides the transcript while `conversationPhase === 'blank'` (`activeTargets` requires a non-command chat node; `promptAttempted` flips on first submit). Harness-side behavior, same for all host commands — and moot for the picker, whose rows report through a composer notice rather than a transcript node (see "The picker's Host channel" below).
 - Reaction calibration is advisory by design: the model names the event and keeps
   final say, so a wrong event label produces a confidently calibrated wrong delta.
   There is no magnitude hard-cap; `|delta| > 50` is reported, not rejected.
@@ -358,6 +358,35 @@ Route log (gate audit): every verdict appends one JSON line to `.persona/.routes
 - `.persona` write guard is a substring check on tool arguments, not a syscall-level jail — and it is registered on the *equipped* agent's scoped context, so it exists only while a persona is equipped. Outside an equipped session nothing physically stops a file tool from writing `.persona/**`; `persona_save` is mandatory because the skill's fixed flow says so and because it is the only channel that validates the whole archive, refuses to overwrite, and completes the skeleton.
 - `spawn_teammate` does not forward a `persona` request field — persona-bound teammates must come from `persona_spawn` or `/persona spawn`.
 - Memory compaction is on-demand (`/persona compact <name>` maintenance call + closing-time tidying), not scheduled — no automatic cadence yet.
+
+## The picker's Host channel (`personaInternals`)
+
+The `/personas` picker is the only human entry point, and it does not submit command lines. Two facts force that:
+
+- **The `/` menu has no hidden flag.** `CommandDefinition` carries only `definitionId`/`name`/`description`/`input`, and `@deepseek-ai/dsh-client-ui-commands` renders every registered command, with no candidate filter hook. So hiding `/persona` means **not registering it** — which is what `slashCommand: false` (the bundle default) does.
+- **An unregistered command cannot be run.** `session.command(line)` resolves against that same registry and answers `matched: false`, so a picker row that submitted `/persona use alice` would fail exactly when the command is hidden.
+
+The picker therefore calls the `personaInternals` Remote service (`bundle/lib/remote.js`), which runs the same `createPersonaOps()` bodies the command parses — `use` / `off` / `spawn` / `compact` / `newFromExample`, each answering `{ ok, text }`. `list` and `status` are deliberately absent: the popup already renders the library and the bound persona.
+
+**Why the markers are hand-written.** The canonical way to expose a Remote service is `TypertRemoteService` + `@Remote` (`packages/typert/protocol`) plus the `build:lib` codegen that emits client declarations and codecs. That path needs the bundle to be a Harness-workspace TypeScript package with a `@deepseek-ai/dsh-typert-protocol` peer dependency and a generation step — none of which a zero-dependency, install-from-a-directory bundle can have, and bare specifiers like `@deepseek-ai/dsh-typert-protocol` do not even resolve from its install path. So `remote.js` writes by hand the two markers those decorators produce at runtime:
+
+- a `typertRemote` binding `{ service, serviceKey, namespace }` on the value `ctx.provide()` registers, and
+- a `'@deepseek-ai/dsh-typert-protocol/remote-methods'` descriptor on the service **prototype**, `{ version: 1, methods: [{ method, invocation: { kind: 'direct' } }] }`.
+
+The Gateway discovers it through the SRC fallback in `resolveSrcDescriptor` (`packages/api/gateway/src/index.ts`): it scans `ctx.reflect.props` for services, reads the binding, matches the namespace, then reads the prototype descriptor. Because the descriptor is weak (no generated codec), the Gateway derives each signature by parsing the method's **source text** (`methodParameterNames`), which imposes hard rules on the method shapes:
+
+- every parameter is a plain unique identifier — no destructuring, defaults, or rest;
+- `agent` must be a top-level parameter, resolved from the wire's `agentId` by the Host's `agent` lookup (registered by `packages/core/agent`);
+- `signal`, if present, must be the **final** parameter — it is carrier cancellation and never a wire field;
+- every other parameter is `src-json`, so it may be omitted (that is how `spawn` works without a task).
+
+**Upgrade regression checklist.** These markers are an internal contract, not a public API. After upgrading DSH — or when a picker action reports a gateway error — run:
+
+```sh
+node docs/verify-remote-src.mjs /path/to/deepseek-harness
+```
+
+It mounts the real Gateway against the real `lib/remote.js` and asserts the whole contract: discovery, the `agent` lookup, `signal` handling, omitted json arguments, refusals crossing as data, and the gateway's own refusals for unknown methods, unresolvable ids, extra arguments, and foreign namespaces. `bundle/tests/remote.test.js` pins the marker SHAPES without the Harness; this script proves the Harness still accepts them. Symptoms to look for if it fails: `gateway/binding-invalid` (binding fields renamed or tightened), `gateway/invocation-unavailable` (descriptor key or discovery changed), `gateway/signature-invalid` (parameter parsing tightened).
 
 ## Memory compaction is one in-process call, not a subagent
 

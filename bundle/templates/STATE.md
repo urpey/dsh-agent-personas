@@ -6,12 +6,12 @@ base:
   energy: { max: 100, value: 80, tick: -1 }
   focus:  { max: 100, value: 60 }
 
-# Layer 1 · JUEL — in-session emotion water (signed -100..∞)
+# Layer 1 · JEWEL — in-session emotion water (signed -100..∞)
 # Positive balance crystallizes into param at settle; a NEGATIVE balance is
 # banked amends that burns the emitted param back down (param floors at 0).
 # emit: which param it settles into · per: points per unit · decay: % of
 # remainder kept after settle (0 clears it, 100 carries it over whole).
-juel:
+jewel:
   joy:     { emit: affection, per: 50, decay: 10, value: 0 }
   anger:   { emit: defiance,  per: 50, decay: 15, value: 0 }
   shame:   { emit: intimacy,  per: 25, decay: 5,  value: 0 }
@@ -39,7 +39,7 @@ marks:
 relations:
   lead: { value: 0 }
 
-# Buffs — temporary deltas over base/juel values (tool-managed)
+# Buffs — temporary deltas over base/jewel values (tool-managed)
 buffs: []
 ---
 

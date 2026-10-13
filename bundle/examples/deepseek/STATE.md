@@ -11,7 +11,7 @@ base:
     value: 73
     tick: -1
     tick_every: 2
-juel:
+jewel:
   joy:
     emit: affection
     per: 50

@@ -18,7 +18,8 @@ import { join } from 'node:path'
 import { personaExists, ensurePersona, listPersonas, libraryRoot, savePersona, BUNDLE_ROOT } from './lib/persona.js'
 import { equipAgent } from './lib/equip.js'
 import { createPersonaProvider, pendingContinuable, pendingOneShot, takeOneShot, queueOneShot, personaRequestText, personaBodyText } from './lib/provider.js'
-import { registerCommands, equipSession } from './lib/commands.js'
+import { registerCommands, equipSession, createPersonaOps } from './lib/commands.js'
+import { createPersonaInternals, REMOTE_SERVICE_KEY } from './lib/remote.js'
 import { readBinding, clearBinding, persistBinding } from './lib/bindings.js'
 import { splitFrontmatter } from './lib/frontmatter.js'
 import { randomUUID } from 'node:crypto'
@@ -44,6 +45,13 @@ export default {
     closingReflection: config?.closingReflection ?? 'one-shot',
     providerName: config?.providerName ?? 'persona',
     criticalGate: config?.criticalGate ?? 'auto',
+    // `false` keeps `/persona` out of the Host command registry, which is what
+    // removes its `/` menu row — the registry has no hidden flag, so
+    // unregistered is the only way to hide it. The `/personas` picker keeps
+    // working through the `personaInternals` Remote service (lib/remote.js),
+    // which drives the same operation bodies. Flip back to `true` to restore
+    // the command alongside the picker.
+    slashCommand: config?.slashCommand !== false,
     // `/persona compact` knobs — all optional; lib/memory-compact.js applies
     // its own defaults (65_536 cap, 1 retry) when these stay unset.
     compactProvider: config?.compactProvider,
@@ -296,6 +304,14 @@ export default {
   })
 
   // --------------------------------------------------------------- commands
-  registerCommands(ctx, cfg, resolveCwd)
+  // One operation table feeds both human surfaces: the optional `/persona`
+  // command and the `/personas` picker's Remote channel, so they cannot drift.
+  const personaOps = createPersonaOps(ctx, cfg, resolveCwd)
+  if (cfg.slashCommand) registerCommands(ctx, cfg, resolveCwd, personaOps)
+  // Provided unconditionally: with the command switched off this service IS the
+  // picker's only way to mutate Host state. `ctx.provide` registers the name in
+  // the shared reflection store, which is what the Gateway scans for Remote
+  // bindings — see lib/remote.js for the contract and its upgrade risk.
+  ctx.provide(REMOTE_SERVICE_KEY, createPersonaInternals(personaOps))
   },
 }

@@ -1,20 +1,24 @@
 /**
  * dsh-agent-personas — browser half of the persona bundle.
  *
- * The `/` menu's command rows are rendered by `@deepseek-ai/dsh-client-ui-commands`.
- * A HOST command row (`/persona`, registered in `lib/commands.js`) can only carry
- * its registered name plus a static `description` — the localized label, the
- * description and the glyph exist only for the first-party commands that package
- * hard-codes by `definitionId`, and a client contribution may not reuse a host
- * command's name (candidate synthesis fails loud on a collision).
+ * The `/` menu's command rows are rendered by `@deepseek-ai/dsh-client-ui-commands`,
+ * and neither that package nor the Host command registry can hide a registered
+ * command: every registration becomes a row. So the bundle ships ONE row — this
+ * client-owned `personas` contribution, whose face (中文名 / 描述 / 图标) and whose
+ * bare-invocation picker live here — and leaves the Host `/persona` command
+ * unregistered by default (`slashCommand: false`), which is the only way to keep
+ * it off the menu.
  *
- * So this half contributes a SECOND, client-owned row: `personas`, whose entire
- * face (中文名 / 描述 / 图标) and whose bare-invocation picker live here, while the
- * host `/persona` command keeps its arguments, its lifecycle logging and its
- * scripted use. Every mutating picker row runs the host command through the
- * session's own `command()` face, so there is exactly one implementation of each
- * operation — except `new`, whose persona name is free text no popup can
- * collect: it submits a kickoff message and lets the agent author the archive
+ * That makes this half the only human entry point, so it cannot submit command
+ * lines: `session.command()` resolves against the same registry and would report
+ * an unknown command. It drives the Host through the `personaInternals` Remote
+ * service instead (`connection.rpc.call` → `lib/remote.js`), which runs the very
+ * same operation bodies the command would have run. Every outcome — success or
+ * refusal — lands as a composer notice, the sanctioned channel for a command
+ * result that carries no session event.
+ *
+ * `new` is the exception: its persona name is free text no popup can collect, so
+ * the row submits a kickoff message and lets the agent author the archive
  * through the `persona-authoring` skill.
  */
 
@@ -53,20 +57,23 @@ window.__ModuleLoader__.load({
     const FRONTMATTER_LINES = 40
 
     /**
-     * The picker's own action rows: localized copy plus the exact HOST command
-     * line each runs. `list` and `status` are NOT here — the popup shows the
-     * library and the bound persona directly, so a flow node would only repeat
-     * what the panel already says. Every row here mutates real state, which
-     * only the host command can do, so each one logs its own flow node.
+     * The picker's own action rows: localized copy plus the `personaInternals`
+     * endpoint each one calls. `list` and `status` are NOT here — the popup shows
+     * the library and the bound persona directly, so a round trip would only
+     * repeat what the panel already says. Every row here mutates real Host state,
+     * and every mutation goes through the Remote channel (`callHost`), never
+     * through a `/persona` line: that command is unregistered by default, so a
+     * submitted line would come back unknown.
+     *
      * `new` is the exception: its persona name is free text no popup shell can
-     * collect, so instead of a doomed `/persona new` line the row carries a
-     * `kickoff` message key — a pick hands the fixed authoring flow to the
-     * agent in this very session (see `submitKickoff`).
+     * collect, so instead of a doomed create call the row carries a `kickoff`
+     * message key — a pick hands the fixed authoring flow to the agent in this
+     * very session (see `submitKickoff`).
      */
     const ACTION_ROWS = [
-      { id: 'action:off', label: 'label.off', detail: 'detail.off', line: '/persona off' },
+      { id: 'action:off', label: 'label.off', detail: 'detail.off', method: 'off' },
       { id: 'action:new', label: 'label.new', detail: 'detail.new', kickoff: 'prompt.new' },
-      { id: 'action:newExample', label: 'label.newExample', detail: 'detail.newExample', line: '/persona new --from deepseek' },
+      { id: 'action:newExample', label: 'label.newExample', detail: 'detail.newExample', method: 'newFromExample', args: { example: 'deepseek' } },
     ]
 
     /** Dictionary namespace owned by this bundle's browser half. */
@@ -96,7 +103,7 @@ window.__ModuleLoader__.load({
       'search.empty': '本工作区还没有人格——选「新建人格档案…」，由 agent 引导创建一个',
       'search.noResults': '没有匹配的人格',
       'error.notRetained': '本会话尚未保留，无法执行人格指令',
-      'error.unknownCommand': '未识别的命令：{line}',
+      'error.hostReply': '人格操作返回了无法识别的结果',
       'prompt.new': '新建人格。请加载 persona-authoring 技能，按其固定流程引导我：我没有资料就从访谈开始，我贴资料就直接生成草稿，经我确认后用 persona_save 落盘，最后询问是否装备。',
     }
 
@@ -124,7 +131,7 @@ window.__ModuleLoader__.load({
       'search.empty': 'No personas in this workspace yet — pick "Create a persona archive…" and the agent authors one with you',
       'search.noResults': 'No matching persona',
       'error.notRetained': 'This session is not retained; persona commands cannot run yet',
-      'error.unknownCommand': 'Unrecognized command: {line}',
+      'error.hostReply': 'The persona operation returned an unrecognized result',
       'prompt.new': 'Create a persona. Load the persona-authoring skill and guide me through its fixed flow: start with the interview when I have no material, draft straight from what I paste when I do, save with persona_save once I confirm, and ask about equipping at the end.',
     }
 
@@ -173,19 +180,65 @@ window.__ModuleLoader__.load({
         // one lookup named `remote.workspaceFiles` and throws without this
         // inject. Declaring the dotted key parks the contribution until the
         // Host's workspace-files namespace is mounted.
-        ctx.inject(['commandUi', 'sessions', 'remote.workspaceFiles'], (scope) => {
+        ctx.inject(['commandUi', 'sessions', 'connection', 'remote.workspaceFiles'], (scope) => {
           const commandUi = scope.get('commandUi')
           const sessions = scope.get('sessions')
+          const connection = scope.get('connection')
           const files = scope.get('remote.workspaceFiles')
-          if (commandUi === undefined || sessions === undefined) return
+          if (commandUi === undefined || sessions === undefined || connection === undefined) return
 
-          /** Run one host command line through the session's own command face. */
-          const runHostLine = async (session, line) => {
-            const binding = sessions.binding(session.sessionId)
-            if (binding === undefined) throw new Error(t('error.notRetained'))
-            const result = await binding.session.command(line)
-            if (!result.ok) throw result.error
-            if (!result.value.matched) throw new Error(t('error.unknownCommand', { line }))
+          /**
+           * Report one landed operation to the composer.
+           *
+           * A Remote call produces no session event, so the `command/run` /
+           * `command/done` flow node that used to carry a picker result no longer
+           * exists; `notify` is the surface the client reserves for exactly this
+           * case ("detached command results"). It is best-effort on purpose: the
+           * operation has ALREADY landed, so a missing notice surface must not be
+           * reported as a failed operation.
+           */
+          const notify = (sessionId, level, text) => {
+            if (typeof text !== 'string' || text === '') return
+            try {
+              const actx = sessions.scope(sessionId)
+              const conversation = actx === undefined ? undefined : actx.get('conversation')
+              if (conversation === undefined) {
+                console.warn(`[agent-personas] no conversation surface for: ${text}`)
+                return
+              }
+              conversation.input.for(actx).notify(level, text)
+            } catch (error) {
+              console.warn('[agent-personas] could not surface the operation result:', error)
+            }
+          }
+
+          /**
+           * Run one persona operation on the Host.
+           *
+           * These are Remote endpoints (`lib/remote.js`), NOT `/persona`
+           * subcommands: the Host command registry has no hidden flag, so hiding
+           * the menu row means not registering the command — and a row that
+           * submitted a command line would then be answered "unknown command".
+           * The Gateway resolves the method's `agent` parameter from the
+           * `agentId` sent here, so the caller only needs the id it already has.
+           *
+           * A business refusal comes back as `{ ok: false, text }` and is thrown
+           * so the popup shell renders it; a carrier failure is thrown as-is.
+           */
+          const callHost = async (session, method, args = {}) => {
+            if (sessions.binding(session.sessionId) === undefined) throw new Error(t('error.notRetained'))
+            const result = await connection.rpc.call(
+              '/api',
+              `personaInternals/${method}`,
+              { args: { agentId: session.sessionId, ...args } },
+            )
+            if (!result.ok) throw new Error(result.error.message)
+            const value = result.value
+            if (value === undefined || value.ok !== true) {
+              const text = value === undefined ? undefined : value.text
+              throw new Error(typeof text === 'string' && text !== '' ? text : t('error.hostReply'))
+            }
+            return typeof value.text === 'string' ? value.text : ''
           }
 
           /**
@@ -221,8 +274,11 @@ window.__ModuleLoader__.load({
               // Dot entries are library infrastructure (`.bindings/`, `.routes/`),
               // never archives — skip them before spending a read on each.
               if (entry.type !== 'directory' || entry.name.startsWith('.')) continue
-              // The host command splits its arguments on whitespace, so a name
-              // holding any cannot round-trip through `/persona use <name>`.
+              // A name holding whitespace stays out of the library rows: the
+              // `/persona` command splits its arguments on whitespace, so such a
+              // name is not reachable from every surface. The picker itself sends
+              // the name as a JSON argument and could carry it — this keeps the
+              // two faces offering the same set.
               if (/\s/u.test(entry.name)) continue
               const archive = `${LIBRARY}/${entry.name}`
               const profile = await files.read(
@@ -271,9 +327,9 @@ window.__ModuleLoader__.load({
                 const sorted = personas
                   .slice()
                   .sort((left, right) => left.name.localeCompare(right.name))
-                // `list` and `status` are views here, not commands: the panel
-                // already carries every archive and the bound one, so running
-                // the host subcommand would only add a redundant flow node.
+                // `list` and `status` are views here, not operations: the panel
+                // already carries every archive and the bound one, so a round
+                // trip would only repeat what the row itself says.
                 const libraryRows = sorted.map(persona => ({
                   id: `use:${persona.name}`,
                   label: persona.name,
@@ -318,35 +374,35 @@ window.__ModuleLoader__.load({
               },
               onSelect: async (option, session) => {
                 // View rows (`action:status`) only report what the panel
-                // already shows; picking one is a no-op, never a command.
+                // already shows; picking one is a no-op, never a Host call.
                 if (option.id === 'action:status') return
                 const split = (prefix) => option.id.startsWith(prefix)
                   ? option.id.slice(prefix.length)
                   : undefined
                 const use = split('use:')
                 if (use !== undefined) {
-                  await runHostLine(session, `/persona use ${use}`)
+                  notify(session.sessionId, 'info', await callHost(session, 'use', { name: use }))
                   return
                 }
                 const spawn = split('spawn:')
                 if (spawn !== undefined) {
-                  await runHostLine(session, `/persona spawn ${spawn}`)
+                  notify(session.sessionId, 'info', await callHost(session, 'spawn', { name: spawn }))
                   return
                 }
                 const compact = split('compact:')
                 if (compact !== undefined) {
-                  await runHostLine(session, `/persona compact ${compact}`)
+                  notify(session.sessionId, 'info', await callHost(session, 'compact', { name: compact }))
                   return
                 }
                 const row = ACTION_ROWS.find(candidate => candidate.id === option.id)
                 if (row === undefined) throw new Error(t('search.noResults'))
                 // The kickoff row hands the free-text flow to the agent rather
-                // than running a command whose argument nobody collected.
+                // than running an operation whose argument nobody collected.
                 if (row.kickoff !== undefined) {
                   await submitKickoff(session, row.kickoff)
                   return
                 }
-                await runHostLine(session, row.line)
+                notify(session.sessionId, 'info', await callHost(session, row.method, row.args))
               },
             },
           }), 'agent-personas: /personas contribution')

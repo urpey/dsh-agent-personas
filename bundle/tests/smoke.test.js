@@ -112,13 +112,13 @@ test('memory CRUD + search + alias', () => {
   assert.equal(mem.listNodes(pd).length, 3)
 })
 
-test('state delta clamps; juel accumulates', () => {
-  const r = st.applyDelta(pd, { base: { energy: +50 }, juel: { shame: +260 }, relations: { lead: +60 } })
+test('state delta clamps; jewel accumulates', () => {
+  const r = st.applyDelta(pd, { base: { energy: +50 }, jewel: { shame: +260 }, relations: { lead: +60 } })
   const e = r.changed.find(c => c.key === 'energy')
   assert.equal(e.after, 100)           // clamped to max
   assert.equal(e.clamped, true)
   const s = st.loadState(pd).data
-  assert.equal(s.juel.shame.value, 260)
+  assert.equal(s.jewel.shame.value, 260)
   assert.equal(s.relations.lead.value, 60)
 })
 
@@ -140,19 +140,19 @@ test('buff apply/refresh/clear + tick expiry', () => {
   assert.equal(st.loadState(pd).data.buffs.length, 0)
 })
 
-test('settle crystallizes juel → param → level-up', () => {
+test('settle crystallizes jewel → param → level-up', () => {
   // shame 260, per 25 → +10 param(intimacy); remainder 10, decay 5 → floor(10*0.05)=0 kept
   const r = st.settle(pd)
   assert.equal(r.paramMoved.intimacy, 10)
-  assert.equal(st.loadState(pd).data.juel.shame.value, 0)
+  assert.equal(st.loadState(pd).data.jewel.shame.value, 0)
   assert.equal(st.loadState(pd).data.param.intimacy, 10)
   // guarded requires wariness:20 — not yet. give fear and settle.
-  st.applyDelta(pd, { juel: { fear: +950 } })
+  st.applyDelta(pd, { jewel: { fear: +950 } })
   const r2 = st.settle(pd)
   // 950/50=19 param(wariness) — below 20, no level-up yet
   assert.equal(r2.paramMoved.wariness, 19)
   assert.equal(st.loadState(pd).data.param.wariness, 19)
-  st.applyDelta(pd, { juel: { fear: +600 } })
+  st.applyDelta(pd, { jewel: { fear: +600 } })
   const r3 = st.settle(pd)
   // wariness total 19+12=31 ≥20 → guarded Lv1, param.wariness = 11
   const d = st.loadState(pd).data
@@ -211,7 +211,7 @@ test('gate prompts: imperative, signals, stage-1 directive', () => {
   // Signals: deterministic facts only, and the first-contact line always exists.
   assert.match(signalsLine({ state: { relations: {} } }), /first contact/)
   const sig = signalsLine({
-    state: { juel: { anger: { value: 40 } }, buffs: [{ name: 'adrenaline' }] },
+    state: { jewel: { anger: { value: 40 } }, buffs: [{ name: 'adrenaline' }] },
     meta: { interests: ['饭'] },
     text: 'hi',
   })
@@ -224,7 +224,7 @@ test('gate prompts: imperative, signals, stage-1 directive', () => {
   // Stage 1 is the monologue alone — the reply is explicitly deferred.
   const one = stageOnePrompt({
     name: 'alice', mbti: 'INTP', reason: 'the 圆 word landed',
-    state: { juel: { anger: { value: 40 } }, base: { energy: { value: 20, max: 100 } }, relations: { lead: { value: -40 } }, buffs: [{ name: 'adrenaline' }] },
+    state: { jewel: { anger: { value: 40 } }, base: { energy: { value: 20, max: 100 } }, relations: { lead: { value: -40 } }, buffs: [{ name: 'adrenaline' }] },
   })
   assert.match(one, /stage 1 of 2/)
   assert.match(one, /the 圆 word landed/)
@@ -368,9 +368,9 @@ test('state rules: a zero relation, a kept defiance, and banked amends reach the
   assert.match(
     stageOnePrompt({ name: 'alice', state: { param: { defiance: 60 } } }),
     /defiance is carried \(60\) — a kept ledger of slights — pushing back comes grown-in; settled standing/)
-  // A banked negative juel is amends waiting to burn standing on settle.
+  // A banked negative jewel is amends waiting to burn standing on settle.
   assert.match(
-    stageOnePrompt({ name: 'alice', state: { juel: { anger: { value: -30 } } } }),
+    stageOnePrompt({ name: 'alice', state: { jewel: { anger: { value: -30 } } } }),
     /anger is banked low \(-30\) — amends\/counterweight/)
   // The flat fallback still exists for a persona with nothing declared.
   assert.match(stageOnePrompt({ name: 'alice' }), /state is flat/)
@@ -536,19 +536,19 @@ test('equip gate ledger: the verdict carries the delta, the log records it', asy
     { criticalGate: 'auto', groundingInterval: 0, closingReflection: 'never' }, 'session')
   await runPreStep(fake, { turn: 1, step: 1, messages: [userMessage('你这肥鱼')] })
   const ack = await fake.tools.get('persona_gate').execute(
-    { critical: false, reason: 'small talk', delta: { juel: { anger: +12 }, event: 'insult' } }, { agent })
+    { critical: false, reason: 'small talk', delta: { jewel: { anger: +12 }, event: 'insult' } }, { agent })
   assert.match(ack, /routine/)
   // The ledger rides the same write channel as state_delta — calibration notice
   // included, in the result the model already reads.
   assert.match(ack, /no reaction profile/)
-  assert.equal(st.loadState(bob).data.juel.anger.value, 12)
+  assert.equal(st.loadState(bob).data.jewel.anger.value, 12)
   const line = lastRoute('session-ledger')
   assert.equal(line.verdict, 'routine')
   assert.equal(line.delta[0].key, 'anger')
   assert.equal(line.delta[0].after, 12)
   // The next step's state block already shows what the verdict recorded.
   const next = await runPreStep(fake, { turn: 1, step: 2, messages: [] })
-  assert.match(injectedText(next), /juel: joy 0 · anger 12/)
+  assert.match(injectedText(next), /jewel: joy 0 · anger 12/)
   // A malformed delta degrades to a notice: the verdict and its directive
   // must survive a bad ledger entry.
   const bad = await fake.tools.get('persona_gate').execute(
@@ -576,10 +576,10 @@ test('equip no-delta ledger: a recorded entry suppresses it', async () => {
   equipAgent(fake.ctx, agent, pd, 'alice',
     { criticalGate: 'auto', groundingInterval: 0, closingReflection: 'never' }, 'session')
   await runPreStep(fake, { turn: 6, step: 1, messages: [userMessage('在吗')] })
-  await fake.tools.get('persona_gate').execute({ critical: false, reason: 'x', delta: { juel: { joy: +3 } } }, { agent })
+  await fake.tools.get('persona_gate').execute({ critical: false, reason: 'x', delta: { jewel: { joy: +3 } } }, { agent })
   // A mid-turn state_delta counts too — the ledger belongs to the turn, not to
   // the gate call that usually opens it.
-  await fake.tools.get('state_delta').execute({ juel: { joy: +2 } }, { agent })
+  await fake.tools.get('state_delta').execute({ jewel: { joy: +2 } }, { agent })
   fake.handlers['agent/turn-stopping'][0]({ agent })
   assert.equal(lastRoute('session-recorded').verdict, 'routine')
 })
@@ -811,9 +811,9 @@ test('equip injected messages are identified: no id-less queue collision', async
 
 test('frontmatter: trailing comments strip, malformed lines throw', () => {
   // Trailing comments are legal YAML and must not corrupt the value.
-  const d = parseYaml('juel:\n  joy: { emit: favor, per: 100, value: 0 }  # 被夸\nkey: 1 # note\nlist:\n  - x  # item note')
-  assert.equal(d.juel.joy.value, 0)
-  assert.equal(d.juel.joy.emit, 'favor')
+  const d = parseYaml('jewel:\n  joy: { emit: favor, per: 100, value: 0 }  # 被夸\nkey: 1 # note\nlist:\n  - x  # item note')
+  assert.equal(d.jewel.joy.value, 0)
+  assert.equal(d.jewel.joy.emit, 'favor')
   assert.equal(d.key, 1)
   assert.deepEqual(d.list, ['x'])
   // `#` inside quotes is data, not a comment.
@@ -829,29 +829,29 @@ test('commented STATE.md: delta applies, schema keys survive write-back', () => 
   const dir = mkdtempSync(join(tmpdir(), 'persona-comment-'))
   writeFileSync(join(dir, 'STATE.md'), [
     '---',
-    'juel:',
+    'jewel:',
     '  joy: { emit: favor, per: 100, decay: 20, value: 0 }  # 被夸、被投喂',
     'relations:',
     '  user: { value: 80 }   # 主人的话永远算数',
     '---',
     '',
   ].join('\n'))
-  const r = st.applyDelta(dir, { juel: { joy: 4 }, relations: { user: 8 } })
+  const r = st.applyDelta(dir, { jewel: { joy: 4 }, relations: { user: 8 } })
   assert.equal(r.changed.find(c => c.key === 'joy').after, 4)
   assert.equal(r.changed.find(c => c.key === 'user').after, 88)
   // The deeper hazard: emit/per/decay must survive load→mutate→save,
   // and the operator must be told comments were dropped.
   const d = st.loadState(dir).data
-  assert.equal(d.juel.joy.emit, 'favor')
-  assert.equal(d.juel.joy.per, 100)
+  assert.equal(d.jewel.joy.emit, 'favor')
+  assert.equal(d.jewel.joy.per, 100)
   assert.match(r.notice ?? '', /comment.*dropped/)
 })
 
 test('state shape: scalar-corrupted layer entries fail fast at load', () => {
   const cases = [
-    ['juel string entry', 'juel:\n  joy: oops\n', /juel\.joy must be a map/],
+    ['jewel string entry', 'jewel:\n  joy: oops\n', /jewel\.joy must be a map/],
     ['base scalar entry', 'base:\n  energy: 50\n', /base\.energy must be a map/],
-    ['missing emit', 'juel:\n  joy: { per: 100, value: 0 }\n', /emit/],
+    ['missing emit', 'jewel:\n  joy: { per: 100, value: 0 }\n', /emit/],
     ['non-numeric param', 'param:\n  favor: soon\n', /param\.favor must be a number/],
     ['buffs not array', 'buffs: { name: x }\n', /buffs must be an array/],
   ]
@@ -868,34 +868,34 @@ test('reactions: MBTI defaults compound, declared overrides, render caps', () =>
   assert.deepEqual(mergeReactions('', {}), {})
   // Letters contribute field + multiplier; two letters on one field compound.
   const infp = mergeReactions('INFP', {})
-  assert.equal(infp.praise.juel.joy, 1.2 * 1.1 * 1.5)           // I × N × F
-  assert.equal(infp.criticism.juel.shame, 1.3 * 1.1 * 1.6)
+  assert.equal(infp.praise.jewel.joy, 1.2 * 1.1 * 1.5)           // I × N × F
+  assert.equal(infp.criticism.jewel.shame, 1.3 * 1.1 * 1.6)
   assert.equal(infp.praise.relations.user, 1.2)                   // F only
   // A declared event layer replaces the merged one wholesale.
-  const declared = mergeReactions('INFP', { praise: { juel: { gluttony: 2 } } })
-  assert.equal(declared.praise.juel.gluttony, 2)
-  assert.equal(declared.praise.juel.joy, undefined)              // replaced, not merged
-  assert.equal(declared.criticism.juel.shame, 1.3 * 1.1 * 1.6)   // other events survive
+  const declared = mergeReactions('INFP', { praise: { jewel: { gluttony: 2 } } })
+  assert.equal(declared.praise.jewel.gluttony, 2)
+  assert.equal(declared.praise.jewel.joy, undefined)              // replaced, not merged
+  assert.equal(declared.criticism.jewel.shame, 1.3 * 1.1 * 1.6)   // other events survive
   // Malformed declarations throw with the offending path.
   assert.throws(() => assertReactions({ praise: { mood: { joy: 1 } } }), /not a writable layer/)
-  assert.throws(() => assertReactions({ praise: { juel: { joy: 0 } } }), /positive number/)
+  assert.throws(() => assertReactions({ praise: { jewel: { joy: 0 } } }), /positive number/)
   assert.throws(() => assertReactions({ praise: [] }), /map of layer/)
   // Render is one line, rounds float artifacts, and caps the event count.
   assert.match(renderReactions(infp), /criticism→shame×2\.29,anger×0\.7/)
-  const many = Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`e${i}`, { juel: { joy: 1 } }]))
+  const many = Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`e${i}`, { jewel: { joy: 1 } }]))
   assert.match(renderReactions(many), /…\+3 more/)
   assert.equal(renderReactions({}), '')
   // The documented authoring shape must survive the real parser: a nested flow
   // map under `reactions:` is where the earlier stringification bug lived.
   const { data: authored } = splitFrontmatter([
     '---', 'mbti: INFP', 'reactions:',
-    '  praise: { juel: { joy: 1.5 }, base: { satiety: 0.3 } }',
-    '  criticism: { juel: { shame: 1.8 } }', '---', '',
+    '  praise: { jewel: { joy: 1.5 }, base: { satiety: 0.3 } }',
+    '  criticism: { jewel: { shame: 1.8 } }', '---', '',
   ].join('\n'))
   const fromFile = mergeReactions(authored.mbti, authored.reactions)
-  assert.equal(fromFile.praise.juel.joy, 1.5)                    // declared layer wins
+  assert.equal(fromFile.praise.jewel.joy, 1.5)                    // declared layer wins
   assert.equal(fromFile.praise.relations.user, 1.2)               // untouched layer keeps F
-  assert.equal(fromFile.criticism.juel.shame, 1.8)
+  assert.equal(fromFile.criticism.jewel.shame, 1.8)
 })
 
 test('base tick: per-turn drift, clamped, no write when idle', () => {
@@ -962,7 +962,7 @@ test('state_delta event calibration: silent in band, noticed when adrift', () =>
   const dir = mkdtempSync(join(tmpdir(), 'persona-cal-'))
   writeFileSync(join(dir, 'STATE.md'), [
     '---',
-    'juel:',
+    'jewel:',
     '  joy: { emit: favor, per: 100, decay: 20, value: 0 }',
     '  shame: { emit: shame, per: 50, decay: 10, value: 0 }',
     'relations:',
@@ -970,24 +970,24 @@ test('state_delta event calibration: silent in band, noticed when adrift', () =>
     '---',
     '',
   ].join('\n'))
-  const reactions = { praise: { juel: { joy: 1.5 }, relations: { user: 1.2 } } }
+  const reactions = { praise: { jewel: { joy: 1.5 }, relations: { user: 1.2 } } }
   // In band for the profile (×1.5 → limit 46) → silent.
-  const ok = st.applyDelta(dir, { event: 'praise', juel: { joy: 15 }, relations: { user: 2 } }, { reactions })
+  const ok = st.applyDelta(dir, { event: 'praise', jewel: { joy: 15 }, relations: { user: 2 } }, { reactions })
   assert.equal(ok.notice, undefined)
-  assert.equal(st.applyDelta(dir, { event: 'praise', juel: { joy: 40 } }, { reactions }).notice, undefined)
+  assert.equal(st.applyDelta(dir, { event: 'praise', jewel: { joy: 40 } }, { reactions }).notice, undefined)
   // Field the event does not map to → noticed as a question, still applied.
-  const wrong = st.applyDelta(dir, { event: 'praise', juel: { shame: 10 } }, { reactions })
-  assert.match(wrong.notice, /"praise" maps to juel\.joy\/relations\.user; juel\.shame received \+10/)
-  assert.equal(st.loadState(dir).data.juel.shame.value, 10)
+  const wrong = st.applyDelta(dir, { event: 'praise', jewel: { shame: 10 } }, { reactions })
+  assert.match(wrong.notice, /"praise" maps to jewel\.joy\/relations\.user; jewel\.shame received \+10/)
+  assert.equal(st.loadState(dir).data.jewel.shame.value, 10)
   // Beyond the profile band → noticed once, never twice for one field.
-  const loud = st.applyDelta(dir, { event: 'praise', juel: { joy: 80 } }, { reactions })
-  assert.match(loud.notice, /juel\.joy \+80 exceeds the "praise" band \(×1\.5 → ≈±23\)/)
+  const loud = st.applyDelta(dir, { event: 'praise', jewel: { joy: 80 } }, { reactions })
+  assert.match(loud.notice, /jewel\.joy \+80 exceeds the "praise" band \(×1\.5 → ≈±23\)/)
   assert.doesNotMatch(loud.notice, /severe band/)
   // Unknown event name → noticed, delta still applied.
-  assert.match(st.applyDelta(dir, { event: 'nonsense', juel: { joy: 1 } }, { reactions }).notice, /no reaction profile/)
+  assert.match(st.applyDelta(dir, { event: 'nonsense', jewel: { joy: 1 } }, { reactions }).notice, /no reaction profile/)
   // No event → only the global severe band speaks.
-  assert.equal(st.applyDelta(dir, { juel: { joy: 10 } }, { reactions }).notice, undefined)
-  assert.match(st.applyDelta(dir, { juel: { joy: 60 } }, { reactions }).notice, /exceeds the severe band/)
+  assert.equal(st.applyDelta(dir, { jewel: { joy: 10 } }, { reactions }).notice, undefined)
+  assert.match(st.applyDelta(dir, { jewel: { joy: 60 } }, { reactions }).notice, /exceeds the severe band/)
   // The profile rides the rendered summary.
   assert.match(st.renderStateSummary(st.loadState(dir).data, { reactions }), /reactions: praise→joy×1\.5,user×1\.2/)
 })
@@ -1066,12 +1066,12 @@ test('equip memory pull-chain: read consumes push, create notice, index title', 
   assert.match(ctx, /memory:\/\/alias\/fruit \(p3 · alias→memory:\/\/food\/mango\)/)
 })
 
-test('settle: decay is % of remainder kept — never grows juel', () => {
+test('settle: decay is % of remainder kept — never grows jewel', () => {
   const dir = mkdtempSync(join(tmpdir(), 'persona-settle-'))
   mkdirSync(join(dir, 'memory'), { recursive: true })
   writeFileSync(join(dir, 'STATE.md'), [
     '---',
-    'juel:',
+    'jewel:',
     '  shame: { emit: shame, per: 50, decay: 10, value: 28 }',
     '  joy: { emit: favor, per: 100, decay: 20, value: 130 }',
     '  fatigue: { emit: fatigue, per: 100, decay: 0, value: 40 }',
@@ -1081,9 +1081,9 @@ test('settle: decay is % of remainder kept — never grows juel', () => {
   ].join('\n'))
   const out = st.settle(dir)
   const after = st.loadState(dir).data
-  assert.equal(after.juel.shame.value, 2)     // floor(28 * 0.10)
-  assert.equal(after.juel.joy.value, 6)       // floor(30 * 0.20)
-  assert.equal(after.juel.fatigue.value, 0)   // decay 0 clears it
+  assert.equal(after.jewel.shame.value, 2)     // floor(28 * 0.10)
+  assert.equal(after.jewel.joy.value, 6)       // floor(30 * 0.20)
+  assert.equal(after.jewel.fatigue.value, 0)   // decay 0 clears it
   assert.equal(out.paramMoved.favor, 1)        // 130 / per 100
-  for (const [k, d] of Object.entries(out.juelDelta)) assert.ok(d.after <= d.before, `${k} grew`)
+  for (const [k, d] of Object.entries(out.jewelDelta)) assert.ok(d.after <= d.before, `${k} grew`)
 })

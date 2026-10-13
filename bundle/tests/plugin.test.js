@@ -41,17 +41,24 @@ function register(root, sessionId, name = 'deepseek') {
 /**
  * Mount the plugin on a recording ctx.
  * @param root - workspace root the plugin resolves an agent's cwd to.
- * @returns the `agent/created` listener, the tools and skills it registered.
+ * @param config - bundle config overrides (e.g. `slashCommand: true`).
+ * @returns the `agent/created` listener, the tools, skills, provided services
+ *   and registered commands.
  */
-function mount(root) {
+function mount(root, config = {}) {
   const listeners = {}
   const providers = new Map()
   const tools = new Map()
   const skills = new Map()
+  const provided = new Map()
+  const commands = []
   const ctx = {
     on: (name, fn) => { (listeners[name] ??= []).push(fn); return () => {} },
     tools: { register: (def) => { tools.set(def.name, def); return () => {} } },
-    commands: { register: () => () => {} },
+    commands: { register: (def) => { commands.push(def); return () => {} } },
+    // The picker's Host channel is provided unconditionally — with `/persona`
+    // switched off it is the only way to mutate persona state.
+    provide: (name, value) => { provided.set(name, value); return () => {} },
     // `ctx.inject` is how the plugin reaches an OPTIONAL service. The skill
     // registry ships in every profile, but the persona engine must not fail to
     // load without it — so the plugin asks, and this stub answers.
@@ -72,10 +79,10 @@ function mount(root) {
       },
     },
   }
-  plugin.apply(ctx, { libraryDir: '.persona' })
+  plugin.apply(ctx, { libraryDir: '.persona', ...config })
   const created = listeners['agent/created']?.[0]
   assert.equal(typeof created, 'function', 'the plugin watches agent/created')
-  return { created, tools, providers, ctx, skills }
+  return { created, tools, providers, ctx, skills, provided, commands }
 }
 
 /** The binding row a session id was registered under, or undefined. */
@@ -260,7 +267,7 @@ test('the persona_spawn tool registers the child it creates, in both modes', asy
 function draft(name) {
   return {
     'PERSONA.md': `---\nname: ${name}\ndescription: 一条线\ntriggers: []\nmbti: INTP\ninterests: []\nreactions: {}\n---\n\n## Layer 1 · Core Self\n\n- **identity**: 一条线\n`,
-    'STATE.md': `---\nbase:\n  energy: { max: 100, value: 80 }\njuel:\n  joy: { emit: affection, per: 100, decay: 20, value: 0 }\nparam:\n  affection: 0\nstats: {}\nmarks: {}\nrelations:\n  lead: { value: 0 }\nbuffs: []\n---\n\n## Notes\n`,
+    'STATE.md': `---\nbase:\n  energy: { max: 100, value: 80 }\njewel:\n  joy: { emit: affection, per: 100, decay: 20, value: 0 }\nparam:\n  affection: 0\nstats: {}\nmarks: {}\nrelations:\n  lead: { value: 0 }\nbuffs: []\n---\n\n## Notes\n`,
     'memory/core/identity.md': `---\ntitle: identity\ndisclosure: always\n---\n\nI am ${name}.\n`,
   }
 }
@@ -383,7 +390,7 @@ test('the persona_use tool equips and registers the session exactly like /person
   assert.equal(result.bindingNote, '', 'a healthy write reports nothing')
 
   const again = use.execute({ name: 'deepseek' }, { agent: target })
-  assert.match(again.error, /already equipped as "deepseek" — \/persona off first/)
+  assert.match(again.error, /already equipped as "deepseek" — unequip it first/)
 })
 
 test('the persona_use tool refuses an archive that does not exist', () => {
@@ -458,4 +465,50 @@ test('the .persona write guard is untouched: file tools stay denied while person
   const saved = await tools.get('persona_save').execute({ name: 'lifeline', files: draft('lifeline') }, { agent: running })
   assert.equal(saved.error, undefined, 'persona_save is the tool-face channel that survives the guard')
   assert.ok(existsSync(join(root, '.persona', 'lifeline', 'PERSONA.md')))
+})
+
+/**
+ * Hiding `/persona` is a REGISTRATION decision: the Host command registry has no
+ * hidden flag, so a registered command always becomes a `/` menu row, and the
+ * only way to keep it off the menu is not to register it. The picker must
+ * therefore work with the command switched off — which is why the Remote service
+ * is provided unconditionally.
+ */
+test('slashCommand:false hides the menu row but keeps the picker channel', () => {
+  const hidden = mount(workspace(), { slashCommand: false })
+  assert.deepEqual(hidden.commands, [], 'no registration means no menu row')
+  const service = hidden.provided.get('personaInternals')
+  assert.ok(service, 'the picker channel is provided regardless of the command switch')
+  assert.equal(service.typertRemote.service, service, 'the provided value is the bound Remote service itself')
+  assert.equal(service.typertRemote.namespace, 'personaInternals')
+})
+
+test('the command stays registered unless the config says otherwise', () => {
+  // Absent config = today's behavior: the command exists alongside the picker.
+  const fallback = mount(workspace())
+  assert.deepEqual(fallback.commands.map(command => command.name), ['persona'])
+  const shown = mount(workspace(), { slashCommand: true })
+  assert.deepEqual(shown.commands.map(command => command.name), ['persona'])
+  assert.ok(shown.provided.has('personaInternals'))
+})
+
+/**
+ * The two human surfaces must not drift: the command is a parser over the very
+ * operation table the Remote service exposes. Identical refusals through both is
+ * the observable consequence — a second implementation would eventually word the
+ * same failure differently.
+ */
+test('the command and the picker drive the same operation bodies', async () => {
+  const root = workspace()
+  const { commands, provided } = mount(root)
+  const service = provided.get('personaInternals')
+  const target = agent(root, 'session-parity')
+
+  const viaCommand = await commands[0].handler({ agent: target, rawInput: 'use ghost' })
+  const viaPicker = await service.use(target, 'ghost')
+
+  assert.equal(viaCommand.kind, 'error')
+  assert.equal(viaPicker.ok, false)
+  assert.equal(viaCommand.text, viaPicker.text, 'one implementation, one wording')
+  assert.match(viaPicker.text, /not found/)
 })

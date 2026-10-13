@@ -456,7 +456,7 @@ test('a second use is refused politely — never a raw section error', async () 
   assert.equal(first.kind, 'success')
   const again = await run('use deepseek')
   assert.equal(again.kind, 'error')
-  assert.match(again.text, /already equipped as "deepseek" — \/persona off first/)
+  assert.match(again.text, /already equipped as "deepseek" — unequip it first/)
 })
 
 test('off on an unequipped session says so', async () => {

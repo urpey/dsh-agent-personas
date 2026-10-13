@@ -13,7 +13,7 @@ A persona archive is `.persona/<name>/` — `PERSONA.md` (identity + voice), `ST
 
 **2 · Legalize the name to `^[\w-]+$`.** ASCII letters, digits, `_` and `-` only. A name the user says out loud (「鲸萝」, "Fischl von Luftschloss") is a *display* name: propose an ASCII slug (`jingluo`, `fischl`), get the user's agreement, then use it as both the directory name and the `name` argument. The display name and its aliases go in Layer 1 `identity` and the `triggers` list — that is what the persona answers to, not what the directory is called.
 
-**3 · Equip with `persona_use`.** It shares one implementation with `/persona use`, so the equip and its binding row land together. If a persona is already equipped the call refuses — relay that and ask the user to run `/persona off` first; do not look for another route.
+**3 · Equip with `persona_use`.** It shares one implementation with the `/personas` picker's equip row, so the equip and its binding row land together. If a persona is already equipped the call refuses — relay that, and tell the user to unequip first from the `/personas` picker (the "Unequip the current persona" row); do not look for another route.
 
 **4 · `persona_save` creates; it never overwrites.** An existing name is rejected (an existing archive is the human's to edit, by hand), and the currently equipped archive is rejected outright — a live persona cannot rewrite itself. A variant is a new name.
 
@@ -40,8 +40,8 @@ Phase C · Save
   nothing is ever half-written.
 Phase D · Close out
   Report what landed → ask once whether to equip.
-    ├─ yes → persona_use(name)   (one already equipped: ask for /persona off first)
-    └─ no  → point at /persona use <name> or /persona spawn <name>
+    ├─ yes → persona_use(name)   (one already equipped: the user unequips from the /personas picker first)
+    └─ no  → the /personas picker equips this session or spawns a child from it
 ```
 
 **Phase A · Collect.** Look at what exists first (`persona_list`, or read `.persona/`). Then one question per turn — a wall of questions gets skimmed answers. Phase complete when you could write every Layer 1/2 field (including three or more reply examples) and the Layer 3 field list without inventing anything the user has not said or approved.
@@ -66,9 +66,9 @@ persona_save({
 - `PERSONA.md` is required — it is what makes a directory an archive. It and `STATE.md` must open with a `---` frontmatter block that parses under the project's minimal grammar (`lib/frontmatter.js`): malformed lines throw there, and the save fails before anything is written.
 - `STATE.md` and `MEMORY.md` may be omitted — they are then filled from `bundle/templates/`. Send them anyway when the persona needs its own gauges or boot list.
 - Validation is whole-archive and happens before any write: one bad key, an unparseable frontmatter line, an existing name, or the equipped name fails the call and leaves nothing on disk. Read the error, fix the draft, call again.
-- `/persona new <name>` remains the scripted skeleton path (empty templates, no content) — a fast route to a bare archive, not a substitute for this flow.
+- A bare skeleton archive — the `/personas` picker's "New persona from an example" row copies a shipped example instead; the empty-template route is `persona_save` with the template files. Either way it is a fast route to a bare archive, not a substitute for this flow.
 
-**Phase D · Close out.** Report the archive and what each file holds. Then ask, once, whether to equip now. Yes → `persona_use(name)`; a persona already equipped gets the `/persona off` prompt instead. No → point at `/persona use <name>` (equip this session) or `/persona spawn <name>` (a child agent that starts equipped).
+**Phase D · Close out.** Report the archive and what each file holds. Then ask, once, whether to equip now. Yes → `persona_use(name)`; a persona already equipped gets pointed at the `/personas` picker's unequip row instead. No → tell them the `/personas` picker equips this session, and `persona_spawn` starts a child that is equipped from its first turn.
 
 ## Archive design
 
@@ -80,9 +80,9 @@ Layer 2 (Voice) must contain *observable* rules: sentence shapes, tics, taboos, 
 
 Layer 2 also carries the `examples` subsection — 3–5 labeled `situation → reply` pairs in the persona's voice. Reuse the user's own lines verbatim when they gave any; otherwise draft from the register just agreed and get them approved. These are the *baseline* voice: `STATE.md` re-tunes them like every other rule in this layer, so a pair must not promise warmth the stance bands can contradict. Mark them as patterns to absorb, never lines to reuse — a persona that recites its examples verbatim has no voice of its own.
 
-Layer 3 declares STATE.md fields. Design juel fields around what should crystallize: `emit` the param that will feed the permanent stat/mark this experience *should* change. Param names are RELATIONAL stock, not emotions — the emotion is the water, the param is what the water leaves behind.
+Layer 3 declares STATE.md fields. Design jewel fields around what should crystallize: `emit` the param that will feed the permanent stat/mark this experience *should* change. Param names are RELATIONAL stock, not emotions — the emotion is the water, the param is what the water leaves behind.
 
-The standard vocabulary carries code-owned meanings (`protocol.md`'s standard-field table): juel {joy, anger, shame, fear, fatigue} and param {affection, defiance, intimacy, wariness, edginess} mean the same thing for every persona — do not restate them in Layer 3; write only what they shade into *for this persona*, or the persona's own extra fields.
+The standard vocabulary carries code-owned meanings (`protocol.md`'s standard-field table): jewel {joy, anger, shame, fear, fatigue} and param {affection, defiance, intimacy, wariness, edginess} mean the same thing for every persona — do not restate them in Layer 3; write only what they shade into *for this persona*, or the persona's own extra fields.
 
 Seed boot memory: create `memory/core/identity.md` and add `memory://core/identity` to `MEMORY.md` Boot URIs — this is what the persona wakes up knowing.
 
@@ -108,16 +108,16 @@ triggers:
 ## Numeric design
 
 - Integer scale only. Delta guidance: ±1–5 nudge, ±5–15 notable, ±15–30 significant, ±30–50 severe.
-- `per` sets how much juel crystallizes one param; `decay` sets what % of the remainder survives a settle (100 = carries over fully). Juel is signed: a negative balance is banked amends and burns the emitted param back down at settle (param floors at 0).
+- `per` sets how much jewel crystallizes one param; `decay` sets what % of the remainder survives a settle (100 = carries over fully). Jewel is signed: a negative balance is banked amends and burns the emitted param back down at settle (param floors at 0).
 - `requires` on stats/marks is the *cost in param*; reaching a mark should feel earned, not free.
-- Keep juel fields few (3–6). Each is a conversation-long accumulator, not a mood dial.
+- Keep jewel fields few (3–6). Each is a conversation-long accumulator, not a mood dial.
 
 ## Anti-patterns
 
 - Describing behavior only in Layer 1 while Layer 2 stays generic — voice is where consistency actually shows.
 - Layer 2 with rules but no `examples` — rules say what the voice does; only a pair shows what it sounds like. A draft without them is unfinished.
 - Example replies that ignore the stance bands — the examples are baseline voice, so an unconditionally warm pair contradicts a cold `relations` and teaches the persona to over-familiarize.
-- A juel field that emits nothing, a param named like a mood (it is standing, not feeling), or a stat with unreachable `requires`.
+- A jewel field that emits nothing, a param named like a mood (it is standing, not feeling), or a stat with unreachable `requires`.
 - Boot memory that explains the persona to itself — boot URIs should hold *identity anchors*, not documentation.
 - Memory written as objective decrees or imperative rules ("必须/禁止/【铁律】") — they are revocable experiences, not laws.
 - Voice rules stored in memory ("说话时总是……") — memory is content truthfulness and shades tone only as the second reference; voice belongs in Layer 2 as re-tuned by STATE.md, the first reference for how the persona sounds.

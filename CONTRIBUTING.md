@@ -21,6 +21,15 @@ node --test tests/*.test.js   # the whole suite — zero deps, node built-in run
 node --check lib/<file>.js    # syntax check a single file you touched
 ```
 
+Touching `lib/remote.js` (the picker's Host channel) means touching a hand-written
+copy of an internal Harness contract. `bundle/tests/remote.test.js` pins the marker
+shapes without the Harness; to prove a real one still accepts them, point the
+out-of-tree check at a built checkout:
+
+```sh
+node docs/verify-remote-src.mjs /path/to/deepseek-harness
+```
+
 Conventions that matter here:
 
 - **Pure JS, zero dependencies, zero build.** Git installs fetch sources, so

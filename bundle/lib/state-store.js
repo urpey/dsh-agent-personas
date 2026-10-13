@@ -1,10 +1,10 @@
 /**
  * Layered integer state over STATE.md.
  *
- * Layers: base (0..max), juel (signed -100..∞ mood water, crystallizes/burns
+ * Layers: base (0..max), jewel (signed -100..∞ mood water, crystallizes/burns
  * param on settle), param (persistent standing, settle-only),
  * stats/marks (levels 0-15, param-costed), relations (-100..+100, direct
- * delta), buffs (temporary deltas over base/juel).
+ * delta), buffs (temporary deltas over base/jewel).
  *
  * Write access: values/buffs/relations via tools ONLY; schema keys
  * (max, emit, per, decay, requires, level) are never touched by tools.
@@ -37,7 +37,7 @@ function validateShape(d, file) {
   const expectMap = (path, v) => {
     if (!isMap(v)) bad(path, `must be a map like { value: 0 }, got ${typeof v === 'object' && v !== null ? 'array' : JSON.stringify(v)?.slice(0, 80)}`)
   }
-  for (const layer of ['base', 'juel', 'stats', 'marks', 'relations']) {
+  for (const layer of ['base', 'jewel', 'stats', 'marks', 'relations']) {
     if (d[layer] === undefined || d[layer] === null) continue
     if (!isMap(d[layer])) bad(layer, 'must be a map of field entries')
     for (const [k, e] of Object.entries(d[layer])) {
@@ -54,7 +54,7 @@ function validateShape(d, file) {
           if (!isNum(c)) bad(`${path}.requires.${j}`, 'must be a number')
       }
       // Missing/wrong emit silently writes param.undefined on settle.
-      if (layer === 'juel') {
+      if (layer === 'jewel') {
         if (typeof e.emit !== 'string' || e.emit === '')
           bad(`${path}.emit`, 'must be a non-empty string (the param it crystallizes into)')
         for (const key of ['per', 'decay'])
@@ -133,8 +133,8 @@ const num = v => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
 
 // ---------------------------------------------------------------- delta ----
 
-/** Apply integer deltas. Only base/juel/relations keys are writable. */
-export function applyDelta(personaDir, { base = {}, juel = {}, relations = {}, event }, opts = {}) {
+/** Apply integer deltas. Only base/jewel/relations keys are writable. */
+export function applyDelta(personaDir, { base = {}, jewel = {}, relations = {}, event }, opts = {}) {
   const { reactions = {} } = opts
   const st = loadState(personaDir)
   const d = st.data
@@ -150,17 +150,17 @@ export function applyDelta(personaDir, { base = {}, juel = {}, relations = {}, e
     changed.push({ layer: 'base', key: k, before, after, clamped: after !== before + step })
     applied.push({ layer: 'base', key: k, dv: step })
   }
-  for (const [k, dv] of Object.entries(juel)) {
-    const f = d.juel?.[k]
-    if (!f) throw new Error(`unknown juel field "${k}"`)
+  for (const [k, dv] of Object.entries(jewel)) {
+    const f = d.jewel?.[k]
+    if (!f) throw new Error(`unknown jewel field "${k}"`)
     const before = num(f.value)
     const step = Math.trunc(num(dv))
     // Signed accumulator: a negative balance is banked amends — it burns the
-    // emitted param on settle. Floor -100 keeps "juel" a ledger, not a pit.
+    // emitted param on settle. Floor -100 keeps "jewel" a ledger, not a pit.
     const after = clamp(before + step, -100, Infinity)
     f.value = after
-    changed.push({ layer: 'juel', key: k, before, after, clamped: after !== before + step })
-    applied.push({ layer: 'juel', key: k, dv: step })
+    changed.push({ layer: 'jewel', key: k, before, after, clamped: after !== before + step })
+    applied.push({ layer: 'jewel', key: k, dv: step })
   }
   for (const [k, dv] of Object.entries(relations)) {
     d.relations ??= {}
@@ -255,14 +255,14 @@ export function tickBase(personaDir, { turn } = {}) {
 
 // ---------------------------------------------------------------- settle ---
 
-/** Crystallize juel → param, then spend param on stats/marks level-ups. */
+/** Crystallize jewel → param, then spend param on stats/marks level-ups. */
 export function settle(personaDir) {
   const st = loadState(personaDir)
   const d = st.data
-  const juelDelta = {}
+  const jewelDelta = {}
   const paramMoved = {}
   d.param ??= {}
-  for (const [key, p] of Object.entries(d.juel ?? {})) {
+  for (const [key, p] of Object.entries(d.jewel ?? {})) {
     const value = num(p.value)
     const per = Math.max(1, Math.trunc(num(p.per ?? 100)))
     const decay = clamp(num(p.decay ?? 0), 0, 100)
@@ -277,7 +277,7 @@ export function settle(personaDir) {
       ? Math.floor(remainder * decay / 100)
       : Math.ceil(remainder * decay / 100)
     if (moved !== 0 || value !== kept) {
-      juelDelta[key] = { before: value, after: kept, emitted: moved, param: p.emit }
+      jewelDelta[key] = { before: value, after: kept, emitted: moved, param: p.emit }
       if (moved !== 0) {
         // param floors at 0 — burned amends past zero are simply spent
         // goodwill that decays away with the remainder, never a debt.
@@ -302,7 +302,7 @@ export function settle(personaDir) {
     }
   }
   save(st)
-  return { juelDelta, paramMoved, levelUps, param: d.param, ...noticeField([commentNoticeText(st)]) }
+  return { jewelDelta, paramMoved, levelUps, param: d.param, ...noticeField([commentNoticeText(st)]) }
 }
 
 /** Append free text to the STATE.md body (the only writable prose field). */
@@ -315,7 +315,7 @@ export function appendNote(personaDir, text) {
 
 // ---------------------------------------------------------------- render ---
 
-/** Effective value of a base/juel field including matching buffs. */
+/** Effective value of a base/jewel field including matching buffs. */
 export function effectiveValue(d, layer, key) {
   const f = d[layer]?.[key]
   const base = num(f?.value)
@@ -337,15 +337,15 @@ export function renderStateSummary(data, { reactions = {} } = {}) {
     ].filter(Boolean)
     lines.push(`${k}: ${effective}/${f.max ?? 100}` + (parts.length ? ` (${parts.join(', ')})` : ''))
   }
-  const juel = Object.entries(data.juel ?? {}).map(([k, f]) => `${k} ${num(f.value)}`).join(' · ')
-  if (juel) lines.push(`juel: ${juel}`)
+  const jewel = Object.entries(data.jewel ?? {}).map(([k, f]) => `${k} ${num(f.value)}`).join(' · ')
+  if (jewel) lines.push(`jewel: ${jewel}`)
   const rel = Object.entries(data.relations ?? {}).map(([k, f]) => {
     const v = num(f.value)
     const s = relationStance(v)
     return `${k} ${v >= 0 ? '+' : ''}${v} (${s.label} — ${s.hint})`
   }).join(' · ')
   if (rel) lines.push(`relations: ${rel}`)
-  // `param` is crystallized standing, not a mood gauge: it outlives the juel
+  // `param` is crystallized standing, not a mood gauge: it outlives the jewel
   // that produced it, so the line says what it is rather than leaving the model
   // to guess whether `defiance×60` is a current feeling or a settled one.
   const param = Object.entries(data.param ?? {}).filter(([, v]) => num(v) > 0).map(([k, v]) => `${k}×${v}`).join(' ')
