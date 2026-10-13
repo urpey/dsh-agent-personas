@@ -291,7 +291,7 @@ Config (`cordis.patch.yml` row `persona-system`, user patch can override):
 | `providerName` | `persona` | `ctx.subagents` provider name |
 | `criticalGate` | `auto` | `auto` (the model rules each turn via `persona_gate`) / `always` (every turn critical) / `never` (every turn routine) |
 
-Binding persistence (resume after restart): `.persona/.bindings/<sessionId>.json` is the **single durable owner** of "which persona is this session equipped with". Two writers, one row each: `/persona use` registers the session it equipped, and every spawn path (`/persona spawn`, `/persona compact`, the `persona_spawn` tool in both modes) registers the child session it created — the child is equipped by construction, so it must be registered too. On the next `agent/created` the plugin reads the row back and re-equips as `mode: 'session'`, and the `/personas` picker reads the same row to badge the equipped persona. **Do not reintroduce a `persona/bound` session event** — live `Session.append` cannot mark an event `ignorable: true`, so an out-of-tree event type persists as a required unknown and `validateStoredEvents` refuses to restore the whole session (session becomes unopenable). **Do not add a second binding channel either**: continuable spawns pass persona BODY text (`lib/provider.js` `personaBodyText`), so a `subagent/descriptor` carries no `persona-profile:` marker to parse — the descriptor-replay branch that used to read one was unreachable dead code and was removed.
+Binding persistence (resume after restart): `.persona/.bindings/<sessionId>.json` is the **single durable owner** of "which persona is this session equipped with". Two writers, one row each: `/persona use` registers the session it equipped, and every spawn path (`/persona spawn`, the `persona_spawn` tool in both modes) registers the child session it created — the child is equipped by construction, so it must be registered too. `/persona compact` is deliberately **not** a writer: it creates no child session at all (see "Memory compaction is one in-process call" below). On the next `agent/created` the plugin reads the row back and re-equips as `mode: 'session'`, and the `/personas` picker reads the same row to badge the equipped persona. **Do not reintroduce a `persona/bound` session event** — live `Session.append` cannot mark an event `ignorable: true`, so an out-of-tree event type persists as a required unknown and `validateStoredEvents` refuses to restore the whole session (session becomes unopenable). **Do not add a second binding channel either**: continuable spawns pass persona BODY text (`lib/provider.js` `personaBodyText`), so a `subagent/descriptor` carries no `persona-profile:` marker to parse — the descriptor-replay branch that used to read one was unreachable dead code and was removed.
 
 Route log (gate audit): every verdict appends one JSON line to `.persona/.routes/<sessionId>.jsonl` — `{ at, turn, step, verdict, reason, signals }`, plus `delta` (the applied `changed` list) when the verdict carried a ledger entry. `at` is ISO-8601 and `verdict` is `critical | routine | missed | no-delta` (`missed` = the turn ended with no verdict; `no-delta` = the turn was ruled but wrote no ledger entry, neither a gate `delta` nor a `state_delta` call). `signals` is the rendered signal block the model ruled against, so a ruling can be reviewed after the fact. The `no-delta` verdict exists because "state is not updated every turn" used to be invisible: it is a count in the log now, and it never interrupts the turn. Appends are best-effort: an unwritable log never breaks a turn. **Do not turn it into a session event** — the same `ignorable` hazard as `.persona/.bindings/` above applies verbatim.
 
@@ -317,5 +317,69 @@ Route log (gate audit): every verdict appends one JSON line to `.persona/.routes
   structure (schema keys, values) survives either way.
 - `.persona` write guard is a substring check on tool arguments, not a syscall-level jail.
 - `spawn_teammate` does not forward a `persona` request field — persona-bound teammates must come from `persona_spawn` or `/persona spawn`.
-- Memory compaction is on-demand (`/persona compact <name>` maintenance one-shot + closing-time tidying), not scheduled — no automatic cadence yet.
+- Memory compaction is on-demand (`/persona compact <name>` maintenance call + closing-time tidying), not scheduled — no automatic cadence yet.
+
+## Memory compaction is one in-process call, not a subagent
+
+`/persona compact <name>` went through two shapes. First a tool loop: the child called
+`memory_read` per node and `memory_update` per edit — a round trip per discovery, every
+write a guess about state read several calls earlier. Then a one-shot structured
+**subagent**: better answers, but it bought a child session, the whole persona machinery
+(tools, gate, closing reflection) and a ~22k-token agent envelope for a maintenance call
+— and the closing reflection queued a second turn after `structured_output` had already
+completed the run, so every tool in that turn was denied by the structured-run guard.
+
+It is now one auxiliary `ctx.llm.stream()` call inside the command handler
+(`lib/memory-compact.js`) — the same seam `dsh-compaction-basic` uses for context
+compaction (`purpose: 'compaction'`), aimed at the tree instead of a session span. It is
+deliberately **not** `ctx.compaction`: that service replaces session-surface spans
+addressed by `SessionSeq`, and a file tree is outside its contract.
+
+1. `renderMemorySnapshot` ships the index and every node body inside ONE user message, so
+   discovery costs nothing and no history needs replaying.
+2. The request declares exactly one tool, `structured_output` (`PLAN_SCHEMA`); the answer
+   is read out of that tool call, with a JSON-in-text fallback for adapters that will not
+   call tools on a one-shot request. A `finish` of `error`/`aborted` fails closed;
+   `max-tokens` consumes a retry to DOUBLE the output cap toward 65_536 (the default —
+   escalation only matters for configured smaller caps); an unreadable answer is re-asked
+   once (`compactRetries`).
+3. `validatePlan` checks the whole plan against the snapshot it was built from, and
+   only then does `applyPlan` write. A half-applied merge is worse than a refused one:
+   the survivor exists, the alias does not, and the next pass cannot tell that from a
+   deliberate state. `validatePlan` refuses unknown URIs, alias-to-missing-target,
+   alias cycles (which would blow the stack in `readNode`'s recursion), a delete that
+   strands an existing alias, a second op on one URI, and an update with no body.
+
+Consequences worth keeping:
+
+- **No child session, no catalog row, no ledger entry.** The run is invisible outside the
+  command reply: `subagents` is not touched, and `/persona compact` no longer appears in
+  `.persona/.bindings/`.
+- **No persona machinery.** There is no equip, so there is no gate, no closing reflection
+  and no second turn to deny. The structured-run guard is never reached — which is why
+  nothing here needs a harness change.
+- **Speed is a contract, not a hope.** `reasoningEffort` is NOT inherited from the routed
+  request (a routed `max` is what made the old run take minutes); the adapter default
+  applies unless `compactReasoningEffort` pins one. `compactProvider`/`compactModel` may
+  pin a fast route, and `compactMaxTokens` sizes the plan budget (default 65_536, the
+  harness compaction's own headroom — `update` ops carry whole node bodies, so
+  agent-class 4k defaults are too small).
+
+Three constraints worth not re-litigating:
+
+- **The tool surface is bounded by the schema, not by a filter.** `tools.restrict()`
+  accepts only global tool names and throws on unknown ones; the audit needs no persona
+  tools at all, so the plan is bounded by `PLAN_SCHEMA` and the one declared tool.
+- **`updateNode` is not the plan channel.** It is a patch API: it needs an anchor and
+  can only add/remove triggers, never set the exact list. Merges go through
+  `rewriteNode` (whole body + whole field set) — a patch would fail on the first
+  reworded sentence.
+- **The Index is rebuilt, never patched.** `syncIndex` reprojects MEMORY.md's Index
+  section from the tree, because a per-row patch would have to reimplement the same
+  projection and drift again. The Boot URIs section is authored state and is left
+  alone — but a boot URI that stops resolving is reported, not silently edited.
+
+Related store fix: `removeIndex` filtered *every* line containing the URI, which
+included the same URI's Boot URIs line — retiring a node silently un-booted a memory.
+It is now scoped to the Index section.
 - `install_bundle` on an already-linked directory reports `ambiguous-install`; `remove_bundle` first, or rely on HMR (watch root must include the bundle dir).

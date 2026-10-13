@@ -8,3 +8,9 @@
         providerName: 'persona'
         # auto: you rule the verdict per turn | always: every turn critical | never: every turn routine
         criticalGate: 'auto'
+        # /persona compact — all optional, unset = the lib defaults below.
+        # compactProvider: ~           # pin a route (needs compactModel too)
+        # compactModel: ~              # e.g. a flash-class model for speed
+        # compactReasoningEffort: ~    # unset = adapter default; a routed `max` is NOT inherited
+        # compactMaxTokens: 65536      # plan output budget; a smaller cap doubles toward 65536 on truncation
+        # compactRetries: 1            # re-asks after an unreadable or truncated answer

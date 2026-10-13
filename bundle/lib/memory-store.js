@@ -104,6 +104,78 @@ export function updateNode(personaDir, uri, { oldString, newString, append, prio
 }
 
 /**
+ * Replace a node's body and/or its whole frontmatter field set in one write.
+ *
+ * `updateNode` is a patch channel: it needs an anchor to edit text, and it can
+ * only add/remove triggers, never SET the exact list. A merge has neither a
+ * stable anchor nor an incremental trigger edit — it produces a new body and a
+ * new field set outright — so it writes through here instead of guessing a
+ * patch that would fail on the first reworded sentence.
+ *
+ * Content always lands on the canonical node: an alias carries no body, so a
+ * rewrite addressed to one redirects to its target.
+ *
+ * @param personaDir - persona archive root.
+ * @param uri - `memory://` path to rewrite.
+ * @param fields - body and any frontmatter fields to replace.
+ * @returns the canonical URI that was actually written.
+ */
+export function rewriteNode(personaDir, uri, { content, priority, disclosure, triggers } = {}) {
+  const node = readNode(personaDir, uri)
+  if (node.aliasTarget) {
+    return rewriteNode(personaDir, node.aliasTarget, { content, priority, disclosure, triggers })
+  }
+  const file = uriToPath(personaDir, uri)
+  const { data, body } = splitFrontmatter(readFileSync(file, 'utf8'))
+  const meta = { ...data }
+  if (priority !== undefined) meta.priority = priority
+  if (disclosure !== undefined) meta.disclosure = disclosure
+  if (triggers !== undefined) meta.triggers = [...new Set(triggers)]
+  const nextBody = content === undefined ? body : `${String(content).trim()}\n`
+  writeFileSync(file, joinFrontmatter(meta, nextBody), 'utf8')
+  return uri
+}
+
+/** The index row for one node, in the exact shape `appendIndex` writes. */
+function indexLine(node) {
+  const uri = node.uri
+  const label = node.aliasOf ? `alias→${node.aliasOf}` : node.title
+  return `- [${node.disclosure || 'always'}] ${uri} — ${label}`
+}
+
+/**
+ * Rebuild MEMORY.md's Index section from the memory tree itself.
+ *
+ * The Index is derived state — every row is a projection of one node's
+ * frontmatter — but it is written incrementally, so an audit that changes a
+ * disclosure, merges two nodes, or retires one leaves rows describing a tree
+ * that no longer exists. Rebuilding from the tree is the only way the Index and
+ * the tree cannot disagree; a per-row patch would have to reimplement the same
+ * projection and drift again.
+ *
+ * The Boot URIs section is left exactly as authored — it is a deliberate
+ * choice, not a projection — but boot URIs that no longer resolve are reported,
+ * because a boot URI pointing at a retired node loads nothing at session start.
+ *
+ * @param personaDir - persona archive root.
+ * @returns the rebuilt row count and every unresolvable boot URI.
+ */
+export function syncIndex(personaDir) {
+  const file = join(personaDir, 'MEMORY.md')
+  if (!existsSync(file)) return { rows: 0, missingBoot: [] }
+  const nodes = listNodes(personaDir)
+    .sort((a, b) => (a.priority ?? 3) - (b.priority ?? 3) || a.uri.localeCompare(b.uri))
+  const rows = nodes.map(n => indexLine(n))
+  const text = readFileSync(file, 'utf8')
+  const head = text.split(/^##\s*Index\s*$/m)[0] ?? text
+  const next = `${head.replace(/\s*$/, '')}\n\n## Index\n${rows.length ? `${rows.join('\n')}\n` : ''}`
+  if (next !== text) writeFileSync(file, next, 'utf8')
+  const live = new Set(nodes.map(n => n.uri))
+  const missingBoot = bootUris(personaDir).filter(uri => !live.has(uri))
+  return { rows: rows.length, missingBoot }
+}
+
+/**
  * Adjacency for a node, for the pull chain: direct children (exactly one URI
  * segment deeper, aliases included as doorways) + see-also links (other
  * nodes' trigger words found in this node's content). Links are addresses,
@@ -230,9 +302,20 @@ function appendIndex(personaDir, uri, title, disclosure) {
   writeFileSync(file, text.replace(/\s*$/, '') + '\n' + line, 'utf8')
 }
 
+/**
+ * Drop one node's row from the Index section.
+ *
+ * Scoped to the Index section on purpose: a boot URI is a line that names the
+ * same `memory://` path, and a whole-file filter for the URI removes it too —
+ * silently un-booting a memory because its node was retired. Retiring a node
+ * must not quietly edit a section the operator authored.
+ */
 function removeIndex(personaDir, uri) {
   const file = join(personaDir, 'MEMORY.md')
   if (!existsSync(file)) return
   const text = readFileSync(file, 'utf8')
-  writeFileSync(file, text.split('\n').filter(l => !l.includes(uri)).join('\n'), 'utf8')
+  const parts = text.split(/^(##\s*Index\s*)$/m)
+  if (parts.length < 3) return
+  const kept = parts[2].split('\n').filter(l => !l.includes(uri))
+  writeFileSync(file, parts[0] + parts[1] + kept.join('\n'), 'utf8')
 }

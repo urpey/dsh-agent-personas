@@ -30,7 +30,7 @@ const NEVER_ABORTS = new AbortController().signal
 
 export default {
   name: 'persona-system',
-  inject: ['agents', 'commands', 'subagents', 'tools', 'systemPrompt'],
+  inject: ['agents', 'commands', 'subagents', 'tools', 'systemPrompt', 'llm'],
   // NOTE: must be an arrow/prototype-less function — cordis treats any
   // plugin callback with a .prototype as a constructor (isConstructor) and
   // would `new` it, dropping the inject-bearing context.
@@ -41,6 +41,13 @@ export default {
     closingReflection: config?.closingReflection ?? 'one-shot',
     providerName: config?.providerName ?? 'persona',
     criticalGate: config?.criticalGate ?? 'auto',
+    // `/persona compact` knobs — all optional; lib/memory-compact.js applies
+    // its own defaults (65_536 cap, 1 retry) when these stay unset.
+    compactProvider: config?.compactProvider,
+    compactModel: config?.compactModel,
+    compactReasoningEffort: config?.compactReasoningEffort,
+    compactMaxTokens: config?.compactMaxTokens,
+    compactRetries: config?.compactRetries,
   }
 
   const resolveCwd = (agent) =>

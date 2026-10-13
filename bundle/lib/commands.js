@@ -5,8 +5,9 @@
 import { randomUUID } from 'node:crypto'
 import { listPersonas, createPersona, personaExists, ensurePersona, personaDir, libraryRoot } from './persona.js'
 import { equipAgent } from './equip.js'
-import { pendingContinuable, personaRequestText, personaBodyText } from './provider.js'
+import { pendingContinuable, personaBodyText } from './provider.js'
 import { persistBinding, clearBinding } from './bindings.js'
+import { compactWithLlm } from './memory-compact.js'
 
 const PLUGIN = 'dsh-persona-system'
 
@@ -107,21 +108,22 @@ export function registerCommands(ctx, cfg, resolveCwd) {
           const [name] = rest
           if (!name) return err('usage: /persona compact <name>')
           if (!personaExists(cwd, name, cfg.libraryDir)) return err(`persona "${name}" not found`)
-          if (!ctx.subagents) return err('subagents service unavailable')
-          const { readPromptAsset } = await import('./persona.js')
-          const run = await ctx.subagents.start(cfg.providerName ?? 'persona', {
-            label: `persona:${name}:compact`,
-            prompt: [{ type: 'text', text: readPromptAsset('compact.md').trim() }],
-            parent: agent,
-            persona: personaRequestText(cwd, name, cfg.libraryDir),
-            signal: NEVER_ABORTS,
-          })
-          // Registered before the run is awaited: the child session exists now,
-          // so entering it while it works must already show it as equipped.
-          const bindingNote = persistBinding(libraryRoot(cwd, cfg.libraryDir), run.id, name)
-          const result = await run.result
-          const text = (result.output ?? []).filter(b => b?.type === 'text').map(b => b.text).join('\n')
-          return ok(`compact ${name} (${result.stopReason}):\n${text || '(no report)'}${bindingNote}`)
+          const dir = personaDir(cwd, name, cfg.libraryDir)
+          // In-process: ONE auxiliary `ctx.llm.stream()` call, no child session.
+          // The tree is the only input; validate → apply land the plan (see
+          // lib/memory-compact.js). Nothing here touches ctx.subagents, so the
+          // run leaves no session, no catalog row and no binding ledger entry.
+          try {
+            const { report } = await compactWithLlm(ctx, { cfg, agent, dir, signal: NEVER_ABORTS })
+            return ok(`compact ${name}:\n${report}`)
+          } catch (e) {
+            // A refused plan is not a transport failure: the tree is untouched
+            // by construction, and that difference must be visible.
+            if (e?.code === 'PLAN_REFUSED') {
+              return err(`compact ${name}: plan refused, memory tree untouched — ${e.message}`)
+            }
+            return err(`compact ${name} failed: ${e.message}`)
+          }
         }
         case 'status': {
           const cur = agent.personaEquip
