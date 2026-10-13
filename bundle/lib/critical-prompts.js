@@ -265,7 +265,14 @@ export function gateInstruction({ signals = '', forced } = {}) {
   return `[persona gate] ${rule}
 Your only output this step is ONE call — no reply text, no <thinking> yet:
 
-  persona_gate({ critical: true|false, reason: "<why, in your own words>" })
+  persona_gate({ critical: true|false, reason: "<why, in your own words>", delta: { palam: { anger: +8 }, event: "insult" } })
+
+\`delta\` is this turn's ledger — what already landed on you while you read the
+input, in the same shape \`state_delta\` takes (optional). Record it here, in the
+same call, before you choose words: an insult that stings, praise that lands, a
+shift in how you stand with the speaker. Leave it out when the turn genuinely
+moved nothing — never invent numbers to look diligent, and never batch a whole
+scene into one lump. What you record shows up in your next step's state block.
 
 ${signals ? `${signals}\n\n` : ''}The reason becomes part of the stage directive when the turn is critical, so write it as yourself, not as a report.
 `

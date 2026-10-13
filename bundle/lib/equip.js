@@ -197,10 +197,31 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
   // The context block is re-injected whenever it could have gone stale: at the
   // start of a turn, and right after any tool that mutates state or memory.
   let contextDirty = true
+  // Did this turn write a ledger entry — a `delta` on the gate call or a
+  // `state_delta` call? Turn-stopping reads it to log a `no-delta` verdict, so
+  // "the model stopped recording" becomes a number in the route log instead of
+  // silence. Reset at each turn boundary.
+  let deltaRecorded = false
   const MUTATORS = new Set([
     'memory_create', 'memory_update', 'memory_delete', 'memory_alias',
     'state_delta', 'state_settle', 'state_note', 'buff_apply', 'buff_clear',
   ])
+  // One owner for the writable-delta shape: `state_delta` and the gate's ledger
+  // take exactly the same object, so they can never drift apart.
+  const DELTA_SCHEMA = {
+    type: 'object',
+    properties: {
+      base: { type: 'object', additionalProperties: { type: 'integer' } },
+      palam: { type: 'object', additionalProperties: { type: 'integer' } },
+      relations: { type: 'object', additionalProperties: { type: 'integer' } },
+      event: { type: 'string' },
+    },
+    additionalProperties: false,
+  }
+  /** A delta that names no field is not a ledger entry — applying it would
+   *  rewrite STATE.md (dropping comments) to record nothing. */
+  const hasDeltaFields = (d) => !!d && typeof d === 'object'
+    && ['base', 'palam', 'relations'].some(l => d[l] && typeof d[l] === 'object' && Object.keys(d[l]).length > 0)
   const T = (def) => {
     if (MUTATORS.has(def.name)) {
       const inner = def.execute
@@ -292,19 +313,18 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
     async (a) => memory.searchNodes(personaDir, a.query, a.limit), { concurrencySafe: true }))
 
   // ---- state tools -------------------------------------------------------
+  // `state_delta` is the mid-turn beat, not the per-turn ledger: the gate call
+  // already carries this turn's entry (see `persona_gate`). Use it for what
+  // lands AFTER the verdict — a second sting inside a critical turn, a shift
+  // that only surfaces while writing the reply.
   T(jsonTool('state_delta',
-    'Apply integer deltas to state. Writable layers only: base (0..max), palam (>=0, crystallizes on settle), relations (-100..+100). Magnitude: ±1–5 nudge, ±5–15 notable, ±15–30 significant, ±30–50 severe. Name the scenario with `event` (e.g. praise/insult/feeding) when you know it — it calibrates the delta against your reaction profile; it never replaces your judgment.',
-    {
-      type: 'object',
-      properties: {
-        base: { type: 'object', additionalProperties: { type: 'integer' } },
-        palam: { type: 'object', additionalProperties: { type: 'integer' } },
-        relations: { type: 'object', additionalProperties: { type: 'integer' } },
-        event: { type: 'string' },
-      },
-      additionalProperties: false,
-    },
-    async (a) => state.applyDelta(personaDir, a, { reactions })))
+    'Apply integer deltas to state, mid-turn. Writable layers only: base (0..max), palam (>=0, crystallizes on settle), relations (-100..+100). Magnitude: ±1–5 nudge, ±5–15 notable, ±15–30 significant, ±30–50 severe. Name the scenario with `event` (e.g. praise/insult/feeding) when you know it — it calibrates the delta against your reaction profile; it never replaces your judgment. The gate call already carries a `delta` for what landed while reading the input; use this tool for what lands after it.',
+    DELTA_SCHEMA,
+    async (a) => {
+      const r = state.applyDelta(personaDir, a, { reactions })
+      deltaRecorded = true
+      return r
+    }))
   T(jsonTool('buff_apply',
     'Apply a named buff/debuff: temporary deltas over base/palam values. Same name refreshes instead of stacking. duration counts turns; null persists until buff_clear.',
     {
@@ -361,12 +381,13 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
   // own reasoning instead of a code-generated string.
   reg(agentCtx.tools.register({
     name: 'persona_gate',
-    description: 'Rule whether this turn deserves deliberation — loaded turns think first. Call it alone, before any reply text.',
+    description: 'Rule whether this turn deserves deliberation — loaded turns think first. Call it alone, before any reply text; the same call carries this turn\'s `delta` ledger entry (what already landed on you).',
     parameters: {
       type: 'object',
       properties: {
         critical: { type: 'boolean' },
         reason: { type: 'string', description: 'why, in your own words — it opens the stage-1 directive' },
+        delta: { ...DELTA_SCHEMA, description: 'this turn\'s ledger: what already landed on you while you read the input (same shape as state_delta). Omit it when the turn moved nothing.' },
       },
       required: ['critical'],
       additionalProperties: false,
@@ -380,6 +401,23 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
       const reason = typeof args?.reason === 'string' ? args.reason.trim() : ''
       gateCalled = true
       awaitingMonologue = critical
+      // The verdict is also the turn's ledger entry. Applying it here (before
+      // the state is loaded for the directive) means the monologue's pressure
+      // lines already include what just landed, and the next step's state block
+      // shows it. A malformed delta degrades to a notice: the verdict and its
+      // directive must survive a bad ledger entry.
+      let ledger = null
+      let ledgerNotice = ''
+      if (hasDeltaFields(args?.delta)) {
+        try {
+          const r = state.applyDelta(personaDir, args.delta, { reactions })
+          deltaRecorded = true
+          ledger = r.changed
+          ledgerNotice = r.notice ?? ''
+        } catch (e) {
+          ledgerNotice = `delta not applied — ${String(e?.message ?? e)}`
+        }
+      }
       let st = {}
       try { st = state.loadState(personaDir).data } catch { /* unreadable state — the directive degrades */ }
       pendingDirective = critical
@@ -394,8 +432,12 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
         verdict: critical ? 'critical' : 'routine',
         reason,
         signals: lastSignals,
+        // Only present when a ledger entry was actually written, so the log's
+        // base shape stays what it always was.
+        ...(ledger ? { delta: ledger } : {}),
       })
-      return critical ? GATE_ACK_CRITICAL : GATE_ACK_ROUTINE
+      const ack = critical ? GATE_ACK_CRITICAL : GATE_ACK_ROUTINE
+      return ledgerNotice ? `${ack}\n[persona] ${ledgerNotice}` : ack
     },
   }))
 
@@ -527,6 +569,7 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
       awaitingMonologue = false
       pendingDirective = ''
       lastSignals = ''
+      deltaRecorded = false
       // Turn-level body clock: buffs age, base fields drift — one write per turn.
       const expired = state.tickBuffs(personaDir)
       state.tickBase(personaDir, { turn })
@@ -608,6 +651,21 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
   // order) so a turn that owes itself a directive pays it before housekeeping.
   reg(agentCtx.on('agent/turn-stopping', ({ agent: stopped }) => {
     const sessionId = stopped?.session?.header?.id ?? agent?.session?.header?.id
+    // The turn was offered the gate, ruled, and wrote no ledger entry — no
+    // `delta` on the verdict and no `state_delta` call. The reply is left
+    // intact: this only makes the omission visible, so "state is not updated
+    // every turn" is a count in the route log instead of silence. Logged ahead
+    // of the directive branches below because it is independent of them.
+    if (gateCalled && !deltaRecorded) {
+      appendRoute(routesRoot, sessionId, {
+        at: new Date().toISOString(),
+        turn: lastTurn,
+        step: lastStep,
+        verdict: 'no-delta',
+        reason: '',
+        signals: lastSignals,
+      })
+    }
     // A verdict with no step left to consume it. A tool call normally opens
     // another step, so this is rare — but if the gate call was the step's last
     // act, the directive would be lost with it.
@@ -671,9 +729,13 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
   // Intentionally NOT a session event: a live `Session.append` cannot mark an
   // out-of-tree type `ignorable: true`, so the event would persist as a
   // required unknown and the whole log would refuse to restore on resume.
-  // `/persona use` persists the binding in `.persona/.bindings/<sessionId>.json`
-  // instead (see lib/bindings.js); spawned children carry the
-  // `persona-profile:` marker in their `subagent/descriptor`.
+  // The ledger in `.persona/.bindings/<sessionId>.json` is the ONE durable
+  // owner of "which persona is this session equipped with" (see
+  // lib/bindings.js): `/persona use` registers the session it equipped, every
+  // spawn path registers the child session it created, and the client's picker
+  // reads the same row for its 已装备 badge. A `subagent/descriptor` marker is
+  // NOT a second channel — continuable spawns carry persona BODY text only
+  // (lib/provider.js `personaBodyText`), so nothing could parse a name from it.
 
   return () => disposers.forEach(d => { try { d() } catch {} })
 }

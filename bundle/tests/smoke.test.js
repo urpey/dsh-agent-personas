@@ -374,6 +374,62 @@ test('equip missed verdict: a turn that never ruled is logged, not interrupted',
   assert.equal(followed.length, 0)
 })
 
+test('equip gate ledger: the verdict carries the delta, the log records it', async () => {
+  const bob = createPersona(tmp, 'bob', 'ledger persona')
+  const agent = fakeAgent('session-ledger')
+  const fake = fakeAgentCtx()
+  equipAgent(fake.ctx, agent, bob, 'bob',
+    { criticalGate: 'auto', groundingInterval: 0, closingReflection: 'never' }, 'session')
+  await runPreStep(fake, { turn: 1, step: 1, messages: [userMessage('你这肥鱼')] })
+  const ack = await fake.tools.get('persona_gate').execute(
+    { critical: false, reason: 'small talk', delta: { palam: { anger: +12 }, event: 'insult' } }, { agent })
+  assert.match(ack, /routine/)
+  // The ledger rides the same write channel as state_delta — calibration notice
+  // included, in the result the model already reads.
+  assert.match(ack, /no reaction profile/)
+  assert.equal(st.loadState(bob).data.palam.anger.value, 12)
+  const line = lastRoute('session-ledger')
+  assert.equal(line.verdict, 'routine')
+  assert.equal(line.delta[0].key, 'anger')
+  assert.equal(line.delta[0].after, 12)
+  // The next step's state block already shows what the verdict recorded.
+  const next = await runPreStep(fake, { turn: 1, step: 2, messages: [] })
+  assert.match(injectedText(next), /palam: joy 0 · anger 12/)
+  // A malformed delta degrades to a notice: the verdict and its directive
+  // must survive a bad ledger entry.
+  const bad = await fake.tools.get('persona_gate').execute(
+    { critical: false, delta: { base: { nope: +5 } } }, { agent })
+  assert.match(bad, /routine/)
+  assert.match(bad, /delta not applied/)
+})
+
+test('equip no-delta ledger: a ruled turn that recorded nothing is logged', async () => {
+  const agent = fakeAgent('session-nodelta')
+  const fake = fakeAgentCtx()
+  equipAgent(fake.ctx, agent, pd, 'alice',
+    { criticalGate: 'auto', groundingInterval: 0, closingReflection: 'never' }, 'session')
+  await runPreStep(fake, { turn: 5, step: 1, messages: [userMessage('在吗')] })
+  await fake.tools.get('persona_gate').execute({ critical: false, reason: 'small talk' }, { agent })
+  fake.handlers['agent/turn-stopping'][0]({ agent })
+  const line = lastRoute('session-nodelta')
+  assert.equal(line.verdict, 'no-delta')
+  assert.equal(line.turn, 5)
+})
+
+test('equip no-delta ledger: a recorded entry suppresses it', async () => {
+  const agent = fakeAgent('session-recorded')
+  const fake = fakeAgentCtx()
+  equipAgent(fake.ctx, agent, pd, 'alice',
+    { criticalGate: 'auto', groundingInterval: 0, closingReflection: 'never' }, 'session')
+  await runPreStep(fake, { turn: 6, step: 1, messages: [userMessage('在吗')] })
+  await fake.tools.get('persona_gate').execute({ critical: false, reason: 'x', delta: { palam: { joy: +3 } } }, { agent })
+  // A mid-turn state_delta counts too — the ledger belongs to the turn, not to
+  // the gate call that usually opens it.
+  await fake.tools.get('state_delta').execute({ palam: { joy: +2 } }, { agent })
+  fake.handlers['agent/turn-stopping'][0]({ agent })
+  assert.equal(lastRoute('session-recorded').verdict, 'routine')
+})
+
 test('equip stream hook: <thinking> in text becomes a reasoning block', async () => {
   const agent = fakeAgent('session-tags')
   const fake = fakeAgentCtx()

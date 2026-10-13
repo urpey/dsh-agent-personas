@@ -38,8 +38,10 @@ function routeFileName(sessionId) {
  *
  * @param libraryRoot - absolute `.persona/` root (NOT the persona directory).
  * @param sessionId - session header id; missing/unusable ids become `unknown`.
- * @param entry - `{ at, turn, step, verdict, reason, signals }`; `verdict` is
- *                'critical' | 'routine' | 'missed', `signals` may be ''.
+ * @param entry - `{ at, turn, step, verdict, reason, signals }`, plus `delta`
+ *                (the applied change list) when the verdict carried a ledger
+ *                entry; `verdict` is 'critical' | 'routine' | 'missed' |
+ *                'no-delta', `signals` may be ''.
  * @returns the path written, or undefined
  */
 export function appendRoute(libraryRoot, sessionId, entry) {
