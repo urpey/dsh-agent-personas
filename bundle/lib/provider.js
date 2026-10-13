@@ -7,7 +7,7 @@
  * lifecycle), while recording a pending persona name so the `agent/created`
  * equip listener can bind the child's tools to `<cwd>/.persona/<name>/`.
  */
-import { renderPersonaPrefix, personaDir, personaExists, ensurePersona } from './persona.js'
+import { renderPersonaPrefix, renderPersonaBody, personaDir, personaExists, ensurePersona, stripPersonaText } from './persona.js'
 
 /** name → personaName bindings keyed by durable child session id (continuable). */
 export const pendingContinuable = new Map()
@@ -38,6 +38,13 @@ export function personaRequestText(cwd, name, libraryDir) {
   return renderPersonaPrefix(dir, name)
 }
 
+/** Prompt-facing persona text for spawns whose name is bound via
+ *  pendingContinuable: body only, no marker, no frontmatter. */
+export function personaBodyText(cwd, name, libraryDir) {
+  const dir = personaDir(cwd, name, libraryDir)
+  return renderPersonaBody(dir, name)
+}
+
 /**
  * Build the provider object registered on ctx.subagents.
  * @param innerName - the stock provider to delegate to ('spawn').
@@ -61,7 +68,10 @@ export function createPersonaProvider(name, innerName, resolveCwd, libraryDir, c
       const parentId = request.parent?.session?.header?.id ?? request.parent?.id
       if (m && parentId) queueOneShot(parentId, m[1])
       const inner = this._inner()
-      const run = await inner.start(request)
+      // Marker line and PERSONA.md frontmatter are detection metadata, not
+      // persona content — strip before the text reaches the child's prompt.
+      const personaText = m ? stripPersonaText(request.persona) : request.persona
+      const run = await inner.start(personaText !== request.persona ? { ...request, persona: personaText } : request)
       if (!reflect) return run
       // The closing reflection adds a housekeeping turn AFTER the task turn.
       // readResult picks the LAST assistant message, which would be the

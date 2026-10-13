@@ -16,7 +16,7 @@
 
 import { personaExists, ensurePersona, listPersonas, libraryRoot, parseProfileMarker } from './lib/persona.js'
 import { equipAgent } from './lib/equip.js'
-import { createPersonaProvider, pendingContinuable, pendingOneShot, takeOneShot, queueOneShot, personaRequestText } from './lib/provider.js'
+import { createPersonaProvider, pendingContinuable, pendingOneShot, takeOneShot, queueOneShot, personaRequestText, personaBodyText } from './lib/provider.js'
 import { registerCommands } from './lib/commands.js'
 import { readBinding, clearBinding } from './lib/bindings.js'
 import { randomUUID } from 'node:crypto'
@@ -155,7 +155,9 @@ export default {
         childId,
         provider: cfg.providerName,
         label: args.label ?? `persona:${args.name}`,
-        request: { parent: agent, prompt: [{ type: 'text', text: args.prompt }], persona: personaText },
+        // Name is bound via pendingContinuable; prompt text must not carry
+        // the marker/frontmatter.
+        request: { parent: agent, prompt: [{ type: 'text', text: args.prompt }], persona: personaBodyText(cwd, args.name, cfg.libraryDir) },
         signal: exec.signal ?? new AbortSignal(),
       })
       return { mode: 'continuable', childId: id, messageId }

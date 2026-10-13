@@ -6,7 +6,7 @@
  */
 import { join, resolve } from 'node:path'
 import { readFileSync, existsSync } from 'node:fs'
-import { renderPersonaPrefix, ensurePersona, readPromptAsset, PROFILE_MARKER } from './persona.js'
+import { renderPersonaBody, ensurePersona, readPromptAsset, PROFILE_MARKER } from './persona.js'
 import * as memory from './memory-store.js'
 import * as state from './state-store.js'
 import { renderStateSummary } from './state-store.js'
@@ -53,14 +53,26 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
   const section = (s) => reg(sp.section(s))
   // When the child was spawned with request.persona (persona provider or
   // provider:'persona' via startContinuable), applyChildComposition already
-  // registered 'deployment:persona-prefix' in this agent's scope carrying our
-  // rendered prefix text — re-registering same-scope throws. Only /persona use
+  // registered 'deployment:persona-prefix' in this agent's scope carrying the
+  // stripped body text — re-registering same-scope throws. Only /persona use
   // on an existing agent needs the scoped shadow over its preset layer.
   try {
     section({
       name: 'deployment:persona-prefix',
       order: sp.getSectionOrder('DEPLOYMENT_PERSONA_PREFIX'),
-      text: renderPersonaPrefix(personaDir, name),
+      text: renderPersonaBody(personaDir, name),
+    })
+  } catch (e) {
+    if (!/already registered in this scope/.test(String(e?.message ?? e))) throw e
+  }
+  // A persona-equipped agent has exactly one identity; shadow the harness
+  // opener so "You are an AI agent powered by DeepSeek Harness." cannot
+  // contradict the persona.
+  try {
+    section({
+      name: 'harness:identity',
+      order: sp.getSectionOrder('HARNESS_IDENTITY'),
+      text: 'You are an AI agent.',
     })
   } catch (e) {
     if (!/already registered in this scope/.test(String(e?.message ?? e))) throw e
@@ -116,7 +128,7 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
   // ---- immersion watch ---------------------------------------------------
   // If the persona leaks machinery nouns in visible text, inject an OOC
   // correction — can't unsay it, but the next reply returns to character.
-  const LEAK = /\bmemory:\/\/|\.persona\b|PERSONA\.md|STATE\.md|MEMORY\.md|persona:state|persona-profile|state_delta|state_settle|memory_(read|create|update|delete|alias|list|search)|buff_(apply|clear)|closingReflection/i
+  const LEAK = /\bmemory:\/\/|\.persona\b|PERSONA\.md|STATE\.md|MEMORY\.md|persona:state|persona-profile|state_delta|state_settle|memory_(read|create|update|delete|alias|list|search)|buff_(apply|clear)|closingReflection|<\/?thinking>|\b(STATE|TRIGGERS|REFUSAL|VOICE)\s*:/i
   reg(agentCtx.on('session/event', (session, event) => {
     if (session !== agent.session || event.type !== 'assistant/message') return
     const blocks = event.data?.message?.content

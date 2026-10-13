@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { splitFrontmatter } from '../lib/frontmatter.js'
-import { createPersona, renderPersonaPrefix, listPersonas, libraryRoot } from '../lib/persona.js'
+import { createPersona, renderPersonaPrefix, renderPersonaBody, stripPersonaText, listPersonas, libraryRoot } from '../lib/persona.js'
 import { readBinding, writeBinding, clearBinding } from '../lib/bindings.js'
 import * as mem from '../lib/memory-store.js'
 import * as st from '../lib/state-store.js'
@@ -88,9 +88,18 @@ test('session binding ledger round-trips and clears', () => {
   assert.equal(readBinding(root, undefined), undefined)      // missing id tolerated
 })
 
-test('persona prefix carries profile marker', () => {
-  const text = renderPersonaPrefix(join(tmp, '.persona', 'alice'), 'alice')
-  assert.match(text, /^persona-profile:alice/)
+test('persona prefix: marker for detection, body for prompt', () => {
+  const dir = join(tmp, '.persona', 'alice')
+  const prefixed = renderPersonaPrefix(dir, 'alice')
+  assert.match(prefixed, /^persona-profile:alice/)
+  // Frontmatter must be stripped in both body and prefix text.
+  assert.doesNotMatch(prefixed, /^---/m)
+  const body = renderPersonaBody(dir, 'alice')
+  assert.doesNotMatch(body, /persona-profile:|^---|description:|triggers:/m)
+  assert.match(body, /Layer 1|Core Self/)
+  // stripPersonaText removes marker + frontmatter from a request.persona payload.
+  const stripped = stripPersonaText(prefixed)
+  assert.doesNotMatch(stripped, /persona-profile:|^---|description:|triggers:/m)
 })
 
 test('memory_update ellipsis patch + title sanitize', () => {

@@ -5,7 +5,7 @@
 import { randomUUID } from 'node:crypto'
 import { listPersonas, createPersona, personaExists, ensurePersona, personaDir, libraryRoot } from './persona.js'
 import { equipAgent } from './equip.js'
-import { pendingContinuable, personaRequestText } from './provider.js'
+import { pendingContinuable, personaRequestText, personaBodyText } from './provider.js'
 import { writeBinding, clearBinding } from './bindings.js'
 
 const PLUGIN = 'dsh-persona-system'
@@ -78,7 +78,8 @@ export function registerCommands(ctx, cfg, resolveCwd, equipMap) {
             request: {
               parent: agent,
               prompt: [{ type: 'text', text: prompt }],
-              persona: personaRequestText(cwd, name, cfg.libraryDir),
+              // Name bound via pendingContinuable — prompt text is body only.
+              persona: personaBodyText(cwd, name, cfg.libraryDir),
             },
             signal: new AbortSignal(),
           })

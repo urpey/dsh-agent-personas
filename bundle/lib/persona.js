@@ -83,14 +83,35 @@ export function createPersona(cwd, name, description = '', libraryDir = '.person
   return dir
 }
 
-/** Rendered persona-prefix text: marker line + PERSONA.md content.
+/** Rendered persona body: PERSONA.md content with frontmatter stripped.
  *  `dir` is the absolute path of `.persona/<name>/` (the persona archive root),
  *  not the workspace cwd — callers that already hold a personaDir must not
- *  double-append the persona name. */
-export function renderPersonaPrefix(dir, name) {
+ *  double-append the persona name. Frontmatter (name/description/triggers) is
+ *  system metadata and never enters the model prompt. */
+export function renderPersonaBody(dir, name) {
   const file = join(dir, 'PERSONA.md')
   if (!existsSync(file)) throw new Error(`persona "${name}" not found under ${dir}`)
-  return `${PROFILE_MARKER}${name}\n\n${readFileSync(file, 'utf8').trim()}\n`
+  const { body } = splitFrontmatter(readFileSync(file, 'utf8'))
+  return `${body.trim()}\n`
+}
+
+/** Full prefix text for detection channels: `persona-profile:<name>` marker
+ *  line + body. The marker is parsed by the persona provider/equip listener;
+ *  it is stripped before the text reaches the prompt. */
+export function renderPersonaPrefix(dir, name) {
+  return `${PROFILE_MARKER}${name}\n\n${renderPersonaBody(dir, name)}`
+}
+
+/** Strip the marker line and frontmatter from persona text — the cleaned
+ *  prompt-facing version of a `request.persona` payload. */
+export function stripPersonaText(text) {
+  if (!text) return text
+  let t = text.replace(/^persona-profile:[\w-]+\s*\n?/m, '').trimStart()
+  if (t.startsWith('---')) {
+    // splitFrontmatter anchors `---` at offset 0 — feed it the trimmed text.
+    t = splitFrontmatter(t).body
+  }
+  return `${t.trim()}\n`
 }
 
 /** Parse `persona-profile:<name>` from a rendered persona text. */
