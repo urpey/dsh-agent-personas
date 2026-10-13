@@ -3,8 +3,9 @@
  *
  * A single Host plugin row. It:
  *  - watches `agent/created` for persona-bound agents (provider spawns,
- *    `persona/bound` log events, pending map) and equips them with the
- *    memory/state tool surface plus persona prompt sections;
+ *    `.persona/.bindings/` ledger, `subagent/descriptor` markers, pending
+ *    maps) and equips them with the memory/state tool surface plus persona
+ *    prompt sections;
  *  - registers the `persona` SubagentProvider (delegates to `spawn`, adds the
  *    persona-profile binding side-channel);
  *  - registers `/persona` slash commands and the `persona_list`/`persona_spawn`
@@ -17,6 +18,7 @@ import { personaExists, ensurePersona, listPersonas, libraryRoot, parseProfileMa
 import { equipAgent } from './lib/equip.js'
 import { createPersonaProvider, pendingContinuable, pendingOneShot, takeOneShot, queueOneShot, personaRequestText } from './lib/provider.js'
 import { registerCommands } from './lib/commands.js'
+import { readBinding, clearBinding } from './lib/bindings.js'
 import { randomUUID } from 'node:crypto'
 
 /** AgentId → { name, dispose } for /persona use|off and teardown. */
@@ -56,14 +58,14 @@ export default {
       const parentId = agent.session?.header?.parentSession
       if (parentId) { personaName = takeOneShot(parentId); if (personaName) mode = 'one-shot' }
     }
-    // 3) durable rebind: prior `persona/bound` event (resume)
+    // 3) durable rebind: /persona use binding ledger (resume).
+    // Bindings live in `.persona/.bindings/<sessionId>.json`, not in the
+    // session log — see lib/bindings.js for why a session event can't work.
     if (!personaName) {
-      try {
-        const evs = agent.session.snapshotEvents?.() ?? []
-        const bound = [...evs].reverse().find(e => e.type === 'persona/bound')
-        personaName = bound?.data?.name
-        if (personaName) mode = 'session'
-      } catch { /* deprecated sync read; detection stays best-effort */ }
+      const cwd = resolveCwd(agent)
+      const sessionId = agent.session?.header?.id ?? agent.session?.id
+      personaName = readBinding(libraryRoot(cwd, cfg.libraryDir), sessionId)
+      if (personaName) mode = 'session'
     }
     // 4) subagent descriptor replay (cold-resumed continuable child)
     if (!personaName) {
@@ -76,7 +78,14 @@ export default {
     }
     if (!personaName) return
     const cwd = resolveCwd(agent)
-    if (!personaExists(cwd, personaName, cfg.libraryDir)) return
+    if (!personaExists(cwd, personaName, cfg.libraryDir)) {
+      // The bound persona archive was deleted — drop the stale ledger entry
+      // so every future resume doesn't re-walk this dead end.
+      if (mode === 'session') {
+        clearBinding(libraryRoot(cwd, cfg.libraryDir), agent.session?.header?.id ?? agent.session?.id)
+      }
+      return
+    }
     const dir = ensurePersona(cwd, personaName, cfg.libraryDir)
     const dispose = equipAgent(agent.ctx, agent, dir, personaName, cfg, mode ?? 'session')
     equipped.set(agent.id, { name: personaName, dispose })

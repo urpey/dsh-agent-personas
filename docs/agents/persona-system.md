@@ -6,6 +6,8 @@ The `dsh-persona-system` plugin bundle gives equipped agents a persistent person
 
 ```
 .persona/
+  .bindings/            # session→persona ledger (runtime, gitignored)
+    <sessionId>.json    # { name, boundAt } — written by /persona use, cleared by /persona off
   <name>/
     PERSONA.md        # identity + voice (agent-read-only; only humans edit)
     STATE.md          # layered numeric state (tools only; see below)
@@ -135,8 +137,11 @@ Config (`cordis.patch.yml` row `persona-system`, user patch can override):
 | `closingReflection` | `one-shot` | `one-shot` / `always` / `never` |
 | `providerName` | `persona` | `ctx.subagents` provider name |
 
+Binding persistence (resume after restart): `/persona use` writes `.persona/.bindings/<sessionId>.json`; on the next `agent/created` the plugin reads it back and re-equips as `mode: 'session'`. **Do not reintroduce a `persona/bound` session event** — live `Session.append` cannot mark an event `ignorable: true`, so an out-of-tree event type persists as a required unknown and `validateStoredEvents` refuses to restore the whole session (session becomes unopenable). Spawned children don't need the ledger: their `subagent/descriptor` carries the `persona-profile:` marker.
+
 ## Known limitations
 
+- `/persona` command cards don't render in a brand-new session until the first message sends: DSH's chat shell hides the transcript while `conversationPhase === 'blank'` (`activeTargets` requires a non-command chat node; `promptAttempted` flips on first submit). Harness-side behavior, same for all host commands.
 - `.persona` write guard is a substring check on tool arguments, not a syscall-level jail.
 - `spawn_teammate` does not forward a `persona` request field — persona-bound teammates must come from `persona_spawn` or `/persona spawn`.
 - Memory compaction is on-demand (`/persona compact <name>` maintenance one-shot + closing-time tidying), not scheduled — no automatic cadence yet.

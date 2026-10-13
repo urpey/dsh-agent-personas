@@ -4,7 +4,8 @@ import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { splitFrontmatter } from '../lib/frontmatter.js'
-import { createPersona, renderPersonaPrefix, listPersonas } from '../lib/persona.js'
+import { createPersona, renderPersonaPrefix, listPersonas, libraryRoot } from '../lib/persona.js'
+import { readBinding, writeBinding, clearBinding } from '../lib/bindings.js'
 import * as mem from '../lib/memory-store.js'
 import * as st from '../lib/state-store.js'
 
@@ -73,6 +74,18 @@ test('settle crystallizes palam → juel → level-up', () => {
   assert.equal(d.marks.humiliation.level, 1)
   assert.equal(d.juel.shame, 4)
   assert.equal(r2.levelUps[0].key, 'humiliation')
+})
+
+test('session binding ledger round-trips and clears', () => {
+  const root = libraryRoot(tmp)
+  const sid = 'session-00000000-0000-4000-8000-0000000000ab'
+  assert.equal(readBinding(root, sid), undefined)           // absent → undefined
+  writeBinding(root, sid, 'alice')
+  assert.equal(readBinding(root, sid), 'alice')
+  clearBinding(root, sid)
+  assert.equal(readBinding(root, sid), undefined)
+  clearBinding(root, sid)                                    // clear is idempotent
+  assert.equal(readBinding(root, undefined), undefined)      // missing id tolerated
 })
 
 test('persona prefix carries profile marker', () => {

@@ -3,11 +3,15 @@
  *   list | new <name> [desc] | use <name> | off | spawn <name> [task] | compact <name> | status
  */
 import { randomUUID } from 'node:crypto'
-import { listPersonas, createPersona, personaExists, ensurePersona, personaDir } from './persona.js'
+import { listPersonas, createPersona, personaExists, ensurePersona, personaDir, libraryRoot } from './persona.js'
 import { equipAgent } from './equip.js'
 import { pendingContinuable, personaRequestText } from './provider.js'
+import { writeBinding, clearBinding } from './bindings.js'
 
 const PLUGIN = 'dsh-persona-system'
+
+/** Durable session id for the binding ledger (header id, matching resume-time lookups). */
+const sessionIdOf = (agent) => agent?.session?.header?.id ?? agent?.session?.id
 
 export function registerCommands(ctx, cfg, resolveCwd, equipMap) {
   ctx.commands.register({
@@ -39,13 +43,22 @@ export function registerCommands(ctx, cfg, resolveCwd, equipMap) {
           const dir = ensurePersona(cwd, name, cfg.libraryDir)
           const dispose = equipAgent(agent.ctx, agent, dir, name, cfg, 'session')
           equipMap.set(agent.id, { name, dispose })
-          return ok(`Persona "${name}" equipped. ${personaDir(cwd, name, cfg.libraryDir)}`)
+          // Persist the binding so a resumed session re-equips itself
+          // (session events can't carry this — see lib/bindings.js header).
+          let bindingNote = ''
+          try {
+            writeBinding(libraryRoot(cwd, cfg.libraryDir), sessionIdOf(agent), name)
+          } catch (e) {
+            bindingNote = ` Binding not persisted — persona will NOT re-equip after restart (${e?.message ?? e}).`
+          }
+          return ok(`Persona "${name}" equipped — takes effect on your next message. ${personaDir(cwd, name, cfg.libraryDir)}${bindingNote}`)
         }
         case 'off': {
           const cur = equipMap.get(agent.id)
           if (!cur) return err('no persona equipped on this session')
           cur.dispose()
           equipMap.delete(agent.id)
+          clearBinding(libraryRoot(cwd, cfg.libraryDir), sessionIdOf(agent))
           return ok(`Persona "${cur.name}" removed; tools and sections unregistered.`)
         }
         case 'spawn': {

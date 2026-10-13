@@ -314,7 +314,12 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
   }
 
   // ---- durable binding fact ----------------------------------------------
-  try { agent.session.append('persona/bound', { name, mode }) } catch { /* session types evolve; equip still holds */ }
+  // Intentionally NOT a session event: a live `Session.append` cannot mark an
+  // out-of-tree type `ignorable: true`, so the event would persist as a
+  // required unknown and the whole log would refuse to restore on resume.
+  // `/persona use` persists the binding in `.persona/.bindings/<sessionId>.json`
+  // instead (see lib/bindings.js); spawned children carry the
+  // `persona-profile:` marker in their `subagent/descriptor`.
 
   return () => disposers.forEach(d => { try { d() } catch {} })
 }
