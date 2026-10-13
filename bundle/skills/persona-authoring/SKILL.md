@@ -80,7 +80,7 @@ Layer 2 (Voice) must contain *observable* rules: sentence shapes, tics, taboos, 
 
 Layer 2 also carries the `examples` subsection — 3–5 labeled `situation → reply` pairs in the persona's voice. Reuse the user's own lines verbatim when they gave any; otherwise draft from the register just agreed and get them approved. These are the *baseline* voice: `STATE.md` re-tunes them like every other rule in this layer, so a pair must not promise warmth the stance bands can contradict. Mark them as patterns to absorb, never lines to reuse — a persona that recites its examples verbatim has no voice of its own.
 
-Layer 3 declares STATE.md fields. Design palam fields around what should crystallize: `emit` the juel that will feed the permanent stat/mark this experience *should* change.
+Layer 3 declares STATE.md fields. Design juel fields around what should crystallize: `emit` the param that will feed the permanent stat/mark this experience *should* change. Param names are RELATIONAL stock (affection/defiance/intimacy/wariness/edginess), not emotions — the emotion is the water, the param is what the water leaves behind.
 
 Seed boot memory: create `memory/core/identity.md` and add `memory://core/identity` to `MEMORY.md` Boot URIs — this is what the persona wakes up knowing.
 
@@ -106,16 +106,16 @@ triggers:
 ## Numeric design
 
 - Integer scale only. Delta guidance: ±1–5 nudge, ±5–15 notable, ±15–30 significant, ±30–50 severe.
-- `per` sets how much palam crystallizes one juel; `decay` sets what % of the remainder survives a settle (100 = carries over fully).
-- `requires` on stats/marks is the *cost in juel*; reaching a mark should feel earned, not free.
-- Keep palam fields few (3–6). Each is a conversation-long accumulator, not a mood dial.
+- `per` sets how much juel crystallizes one param; `decay` sets what % of the remainder survives a settle (100 = carries over fully). Juel is signed: a negative balance is banked amends and burns the emitted param back down at settle (param floors at 0).
+- `requires` on stats/marks is the *cost in param*; reaching a mark should feel earned, not free.
+- Keep juel fields few (3–6). Each is a conversation-long accumulator, not a mood dial.
 
 ## Anti-patterns
 
 - Describing behavior only in Layer 1 while Layer 2 stays generic — voice is where consistency actually shows.
 - Layer 2 with rules but no `examples` — rules say what the voice does; only a pair shows what it sounds like. A draft without them is unfinished.
 - Example replies that ignore the stance bands — the examples are baseline voice, so an unconditionally warm pair contradicts a cold `relations` and teaches the persona to over-familiarize.
-- A palam field that emits nothing, or a stat with unreachable `requires`.
+- A juel field that emits nothing, a param named like a mood (it is standing, not feeling), or a stat with unreachable `requires`.
 - Boot memory that explains the persona to itself — boot URIs should hold *identity anchors*, not documentation.
 - Memory written as objective decrees or imperative rules ("必须/禁止/【铁律】") — they are revocable experiences, not laws.
 - Voice rules stored in memory ("说话时总是……") — memory is content truthfulness and shades tone only as the second reference; voice belongs in Layer 2 as re-tuned by STATE.md, the first reference for how the persona sounds.

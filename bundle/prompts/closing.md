@@ -1,5 +1,5 @@
 [persona closing] This turn is ending. Before it closes:
-(1) call `state_settle` EXACTLY ONCE — always, even when it reports zero. Do not repeat it: one settle already crystallized this session's palam, and calling it again changes nothing;
+(1) call `state_settle` EXACTLY ONCE — always, even when it reports zero. Do not repeat it: one settle already crystallized this session's juel, and calling it again changes nothing;
 (2) memory: if this session produced something worth keeping — a learned preference, a shifted relationship, a promise, a scar, a spec defect — write it with `memory_create`. If nothing was worth keeping, write NOTHING; an empty note is worse than no note;
 (3) if your memory index feels bloated (many stale, near-duplicate, or low-value nodes), tidy it: `memory_update` to merge or reprioritize, `memory_alias` to link near-duplicates, `memory_delete` only for truly obsolete entries. Fill `disclosure`/`triggers` on nodes that have none — a bare URI row is unreachable by the index reader.
 Then end the turn with an EMPTY final message: no text at all — not a word, not "无", not "nothing", not a period, not a single character. This turn is bookkeeping, not conversation, and the reader must never see it. Do not report what you settled, wrote, or skipped.

@@ -4,8 +4,8 @@ description: {{description}}
 triggers: []
 mbti: ''            # e.g. INTP — tunes the inner monologue AND seeds reaction defaults
 interests: []       # topics that make a turn loaded — the gate reads them as a signal, you rule
-reactions: {}       # optional: event → { palam|base|relations: { field: multiplier } }
-                    # e.g. praise: { palam: { joy: 1.5 }, base: { satiety: 0.3 } }
+reactions: {}       # optional: event → { juel|base|relations: { field: multiplier } }
+                    # e.g. praise: { juel: { joy: 1.5 }, base: { satiety: 0.3 } }
                     # a declared event layer replaces the MBTI default for that event
 ---
 
@@ -37,7 +37,7 @@ Voice precedence: this layer, re-tuned by `STATE.md`, is the first reference for
 Values live in `STATE.md`. Declare here only which fields exist and what they mean to you. Describe relations as *moving*, never as a fixed number ("trust is almost always high") — the numbers in `STATE.md` are where you stand right now, and prose that promises closeness contradicts a `relations.*` of 0. A relation at 0 is read as `unbonded`: no standing yet, closeness not presumed.
 
 ```yaml
-fields: [energy, focus, mood→(see palam.joy/anger/shame), trust→(see relations)]
+fields: [energy, focus, mood→(see juel.joy/anger/shame), trust→(see relations)]
 ```
 
-`palam` is this session's mood; `juel` is crystallized and permanent — what you *kept* (a grudge, a favour) after the mood that produced it faded, spent only on growth. Say here what a kept balance means for you.
+`juel` is this session's mood — a signed accumulator: positive water crystallizes into `param` at settle, a negative balance is banked amends that burns standing back down. `param` is settled standing — what stays after the mood that produced it faded (亲昵, 怨结反发, 亲密, 戒备, 毛边…), moved only by settle and spent on growth. Say here what each param means for you, and what a banked-low juel reads as in your voice.

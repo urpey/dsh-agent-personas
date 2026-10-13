@@ -215,7 +215,7 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
     type: 'object',
     properties: {
       base: { type: 'object', additionalProperties: { type: 'integer' } },
-      palam: { type: 'object', additionalProperties: { type: 'integer' } },
+      juel: { type: 'object', additionalProperties: { type: 'integer' } },
       relations: { type: 'object', additionalProperties: { type: 'integer' } },
       event: { type: 'string' },
     },
@@ -224,7 +224,7 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
   /** A delta that names no field is not a ledger entry — applying it would
    *  rewrite STATE.md (dropping comments) to record nothing. */
   const hasDeltaFields = (d) => !!d && typeof d === 'object'
-    && ['base', 'palam', 'relations'].some(l => d[l] && typeof d[l] === 'object' && Object.keys(d[l]).length > 0)
+    && ['base', 'juel', 'relations'].some(l => d[l] && typeof d[l] === 'object' && Object.keys(d[l]).length > 0)
   /** Optional string argument, trimmed — '' for anything else. */
   const str = (v) => (typeof v === 'string' ? v.trim() : '')
   const T = (def) => {
@@ -323,7 +323,7 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
   // lands AFTER the verdict — a second sting inside a critical turn, a shift
   // that only surfaces while writing the reply.
   T(jsonTool('state_delta',
-    'Apply integer deltas to state, mid-turn. Writable layers only: base (0..max), palam (>=0, crystallizes on settle), relations (-100..+100). Magnitude: ±1–5 nudge, ±5–15 notable, ±15–30 significant, ±30–50 severe. Name the scenario with `event` (e.g. praise/insult/feeding) when you know it — it calibrates the delta against your reaction profile; it never replaces your judgment. The gate call already carries a `delta` for what landed while reading the input; use this tool for what lands after it.',
+    'Apply integer deltas to state, mid-turn. Writable layers only: base (0..max), juel (signed -100..∞ — negative is banked amends, it burns the emitted param on settle), relations (-100..+100). Magnitude: ±1–5 nudge, ±5–15 notable, ±15–30 significant, ±30–50 severe. Name the scenario with `event` (e.g. praise/insult/feeding) when you know it — it calibrates the delta against your reaction profile; it never replaces your judgment. The gate call already carries a `delta` for what landed while reading the input; use this tool for what lands after it.',
     DELTA_SCHEMA,
     async (a) => {
       const r = state.applyDelta(personaDir, a, { reactions })
@@ -331,7 +331,7 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
       return r
     }))
   T(jsonTool('buff_apply',
-    'Apply a named buff/debuff: temporary deltas over base/palam values. Same name refreshes instead of stacking. duration counts turns; null persists until buff_clear.',
+    'Apply a named buff/debuff: temporary deltas over base/juel values. Same name refreshes instead of stacking. duration counts turns; null persists until buff_clear.',
     {
       type: 'object',
       properties: {
@@ -351,7 +351,7 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
     },
     async (a) => state.clearBuffs(personaDir, a)))
   T(jsonTool('state_settle',
-    'Rest and crystallize: palam → juel per each field\'s per/decay, then juel pays stats/marks requires to raise permanent levels (max +1 each). Call when a chapter ends.',
+    'Rest and crystallize: juel → param per each field\'s per/decay (negative juel burns param back — banked amends pay standing down, floored at 0), then param pays stats/marks requires to raise permanent levels (max +1 each). Call when a chapter ends.',
     { type: 'object', properties: {}, additionalProperties: false },
     async () => state.settle(personaDir)))
   T(jsonTool('state_note',

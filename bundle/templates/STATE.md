@@ -6,35 +6,40 @@ base:
   energy: { max: 100, value: 80, tick: -1 }
   focus:  { max: 100, value: 60 }
 
-# Layer 1 · PALAM — session emotion accumulators (>=0, unbounded)
-# emit: which juel this crystallizes into · per: points per gem · decay: % of remainder kept after settle
-palam:
-  joy:     { emit: favor,   per: 100, decay: 20, value: 0 }
-  anger:   { emit: grudge,  per: 100, decay: 30, value: 0 }
-  shame:   { emit: shame,   per: 50,  decay: 10, value: 0 }
-  arousal: { emit: desire,  per: 100, decay: 50, value: 0 }
-  fatigue: { emit: fatigue, per: 100, decay: 0,  value: 0 }
-
-# Layer 2 · JUEL — crystallized gems (permanent; settle-only)
+# Layer 1 · JUEL — in-session emotion water (signed -100..∞)
+# Positive balance crystallizes into param at settle; a NEGATIVE balance is
+# banked amends that burns the emitted param back down (param floors at 0).
+# emit: which param it settles into · per: points per unit · decay: % of
+# remainder kept after settle (0 clears it, 100 carries it over whole).
 juel:
-  favor: 0
-  grudge: 0
-  shame: 0
-  desire: 0
-  fatigue: 0
+  joy:     { emit: affection, per: 100, decay: 20, value: 0 }
+  anger:   { emit: defiance,  per: 100, decay: 30, value: 0 }
+  shame:   { emit: intimacy,  per: 50,  decay: 10, value: 0 }
+  fear:    { emit: wariness,  per: 100, decay: 20, value: 0 }
+  fatigue: { emit: edginess,  per: 100, decay: 0,  value: 0 }
 
-# Layer 3 · permanent growth — tool-read-only; raised only when juel meets requires
+# Layer 2 · PARAM — persistent standing (settle-only; relational stock, not mood)
+# affection 亲昵 · defiance 反发/反抗 · intimacy 亲密 · wariness 戒备 · edginess 毛边
+param:
+  affection: 0
+  defiance: 0
+  intimacy: 0
+  wariness: 0
+  edginess: 0
+
+# Layer 3 · permanent growth — tool-read-only; raised only when param meets requires
 stats:
-  candor:    { level: 0, requires: { favor: 10 } }
-  composure: { level: 0, requires: { grudge: 5, shame: 5 } }
+  candor:    { level: 0, requires: { affection: 10 } }
+  composure: { level: 0, requires: { defiance: 5, wariness: 5 } }
 marks:
-  humiliation: { level: 0, requires: { shame: 20 } }
+  guarded: { level: 0, requires: { wariness: 20 } }
 
-# Relations — persistent, direct deltas allowed, -100..+100
+# Relations — persistent, direct deltas allowed, -100..+100 (stance right now;
+# param is the settled climate, relations the weather)
 relations:
   lead: { value: 0 }
 
-# Buffs — temporary deltas over base/palam values (tool-managed)
+# Buffs — temporary deltas over base/juel values (tool-managed)
 buffs: []
 ---
 

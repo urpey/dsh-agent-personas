@@ -1,9 +1,10 @@
 /**
  * layered integer state over STATE.md.
  *
- * Layers: base (0..max), palam (>=0 unbounded → juel on settle),
- * juel (permanent, settle-only), stats/marks (levels 0-15, juel-costed),
- * relations (-100..+100, direct delta), buffs (temporary deltas over base/palam).
+ * Layers: base (0..max), juel (signed -100..∞ mood water, crystallizes/burns
+ * param on settle), param (persistent standing, settle-only),
+ * stats/marks (levels 0-15, param-costed), relations (-100..+100, direct
+ * delta), buffs (temporary deltas over base/juel).
  *
  * Write access: values/buffs/relations via tools ONLY; schema keys
  * (max, emit, per, decay, requires, level) are never touched by tools.
@@ -36,7 +37,7 @@ function validateShape(d, file) {
   const expectMap = (path, v) => {
     if (!isMap(v)) bad(path, `must be a map like { value: 0 }, got ${typeof v === 'object' && v !== null ? 'array' : JSON.stringify(v)?.slice(0, 80)}`)
   }
-  for (const layer of ['base', 'palam', 'stats', 'marks', 'relations']) {
+  for (const layer of ['base', 'juel', 'stats', 'marks', 'relations']) {
     if (d[layer] === undefined || d[layer] === null) continue
     if (!isMap(d[layer])) bad(layer, 'must be a map of field entries')
     for (const [k, e] of Object.entries(d[layer])) {
@@ -48,23 +49,23 @@ function validateShape(d, file) {
       if (layer === 'base' && e.tick_every !== undefined && !isNum(e.tick_every)) bad(`${path}.tick_every`, 'must be a number')
       if (e.level !== undefined && !isNum(e.level)) bad(`${path}.level`, 'must be a number')
       if (e.requires !== undefined) {
-        if (!isMap(e.requires)) bad(`${path}.requires`, 'must be a map of juel costs')
+        if (!isMap(e.requires)) bad(`${path}.requires`, 'must be a map of param costs')
         for (const [j, c] of Object.entries(e.requires))
           if (!isNum(c)) bad(`${path}.requires.${j}`, 'must be a number')
       }
-      // Missing/wrong emit silently writes juel.undefined on settle.
-      if (layer === 'palam') {
+      // Missing/wrong emit silently writes param.undefined on settle.
+      if (layer === 'juel') {
         if (typeof e.emit !== 'string' || e.emit === '')
-          bad(`${path}.emit`, 'must be a non-empty string (the juel it crystallizes into)')
+          bad(`${path}.emit`, 'must be a non-empty string (the param it crystallizes into)')
         for (const key of ['per', 'decay'])
           if (e[key] !== undefined && !isNum(e[key])) bad(`${path}.${key}`, 'must be a number')
       }
     }
   }
-  if (d.juel !== undefined && d.juel !== null) {
-    if (!isMap(d.juel)) bad('juel', 'must be a map of gem counts')
-    for (const [k, v] of Object.entries(d.juel))
-      if (!isNum(v)) bad(`juel.${k}`, 'must be a number')
+  if (d.param !== undefined && d.param !== null) {
+    if (!isMap(d.param)) bad('param', 'must be a map of standing counts')
+    for (const [k, v] of Object.entries(d.param))
+      if (!isNum(v)) bad(`param.${k}`, 'must be a number')
   }
   if (d.buffs !== undefined && d.buffs !== null) {
     if (!Array.isArray(d.buffs)) bad('buffs', 'must be an array')
@@ -132,8 +133,8 @@ const num = v => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
 
 // ---------------------------------------------------------------- delta ----
 
-/** Apply integer deltas. Only base/palam/relations keys are writable. */
-export function applyDelta(personaDir, { base = {}, palam = {}, relations = {}, event }, opts = {}) {
+/** Apply integer deltas. Only base/juel/relations keys are writable. */
+export function applyDelta(personaDir, { base = {}, juel = {}, relations = {}, event }, opts = {}) {
   const { reactions = {} } = opts
   const st = loadState(personaDir)
   const d = st.data
@@ -149,15 +150,17 @@ export function applyDelta(personaDir, { base = {}, palam = {}, relations = {}, 
     changed.push({ layer: 'base', key: k, before, after, clamped: after !== before + step })
     applied.push({ layer: 'base', key: k, dv: step })
   }
-  for (const [k, dv] of Object.entries(palam)) {
-    const f = d.palam?.[k]
-    if (!f) throw new Error(`unknown palam field "${k}"`)
+  for (const [k, dv] of Object.entries(juel)) {
+    const f = d.juel?.[k]
+    if (!f) throw new Error(`unknown juel field "${k}"`)
     const before = num(f.value)
     const step = Math.trunc(num(dv))
-    const after = Math.max(0, before + step)
+    // Signed accumulator: a negative balance is banked amends — it burns the
+    // emitted param on settle. Floor -100 keeps "juel" a ledger, not a pit.
+    const after = clamp(before + step, -100, Infinity)
     f.value = after
-    changed.push({ layer: 'palam', key: k, before, after, clamped: after !== before + step })
-    applied.push({ layer: 'palam', key: k, dv: step })
+    changed.push({ layer: 'juel', key: k, before, after, clamped: after !== before + step })
+    applied.push({ layer: 'juel', key: k, dv: step })
   }
   for (const [k, dv] of Object.entries(relations)) {
     d.relations ??= {}
@@ -252,27 +255,35 @@ export function tickBase(personaDir, { turn } = {}) {
 
 // ---------------------------------------------------------------- settle ---
 
-/** Crystallize palam → juel, then spend juel on stats/marks level-ups. */
+/** Crystallize juel → param, then spend param on stats/marks level-ups. */
 export function settle(personaDir) {
   const st = loadState(personaDir)
   const d = st.data
-  const palamDelta = {}
-  const juelGained = {}
-  d.juel ??= {}
-  for (const [key, p] of Object.entries(d.palam ?? {})) {
+  const juelDelta = {}
+  const paramMoved = {}
+  d.param ??= {}
+  for (const [key, p] of Object.entries(d.juel ?? {})) {
     const value = num(p.value)
     const per = Math.max(1, Math.trunc(num(p.per ?? 100)))
     const decay = clamp(num(p.decay ?? 0), 0, 100)
-    const gain = Math.floor(value / per)
-    const remainder = value % per
+    // Signed crystallization: positive balance emits whole gems
+    // (Math.trunc keeps the sign — a negative balance BURNS the emitted
+    // param back, i.e. banked amends pay down standing grievance/shame).
+    const moved = Math.trunc(value / per)
+    const remainder = value - moved * per
     // decay = % of the remainder that SURVIVES the settle (0 clears it,
-    // 100 carries it over whole). A settle never grows an accumulator.
-    const kept = Math.floor(remainder * decay / 100)
-    if (gain > 0 || value !== kept) {
-      palamDelta[key] = { before: value, after: kept, emitted: gain, juel: p.emit }
-      if (gain > 0) {
-        d.juel[p.emit] = num(d.juel[p.emit]) + gain
-        juelGained[p.emit] = (juelGained[p.emit] ?? 0) + gain
+    // 100 carries it over whole), applied symmetrically toward zero.
+    const kept = remainder >= 0
+      ? Math.floor(remainder * decay / 100)
+      : Math.ceil(remainder * decay / 100)
+    if (moved !== 0 || value !== kept) {
+      juelDelta[key] = { before: value, after: kept, emitted: moved, param: p.emit }
+      if (moved !== 0) {
+        // param floors at 0 — burned amends past zero are simply spent
+        // goodwill that decays away with the remainder, never a debt.
+        const after = Math.max(0, num(d.param[p.emit]) + moved)
+        d.param[p.emit] = after
+        paramMoved[p.emit] = (paramMoved[p.emit] ?? 0) + moved
       }
       p.value = kept
     }
@@ -283,15 +294,15 @@ export function settle(personaDir) {
       const level = Math.trunc(num(entry.level))
       const req = entry.requires ?? {}
       if (level >= 15) continue
-      const affordable = Object.entries(req).every(([j, cost]) => num(d.juel[j]) >= num(cost))
+      const affordable = Object.entries(req).every(([j, cost]) => num(d.param[j]) >= num(cost))
       if (!affordable) continue
-      for (const [j, cost] of Object.entries(req)) d.juel[j] = num(d.juel[j]) - num(cost)
+      for (const [j, cost] of Object.entries(req)) d.param[j] = num(d.param[j]) - num(cost)
       entry.level = level + 1
       levelUps.push({ kind, key, level: entry.level })
     }
   }
   save(st)
-  return { palamDelta, juelGained, levelUps, juel: d.juel, ...noticeField([commentNoticeText(st)]) }
+  return { juelDelta, paramMoved, levelUps, param: d.param, ...noticeField([commentNoticeText(st)]) }
 }
 
 /** Append free text to the STATE.md body (the only writable prose field). */
@@ -304,7 +315,7 @@ export function appendNote(personaDir, text) {
 
 // ---------------------------------------------------------------- render ---
 
-/** Effective value of a base/palam field including matching buffs. */
+/** Effective value of a base/juel field including matching buffs. */
 export function effectiveValue(d, layer, key) {
   const f = d[layer]?.[key]
   const base = num(f?.value)
@@ -326,19 +337,19 @@ export function renderStateSummary(data, { reactions = {} } = {}) {
     ].filter(Boolean)
     lines.push(`${k}: ${effective}/${f.max ?? 100}` + (parts.length ? ` (${parts.join(', ')})` : ''))
   }
-  const palam = Object.entries(data.palam ?? {}).map(([k, f]) => `${k} ${num(f.value)}`).join(' · ')
-  if (palam) lines.push(`palam: ${palam}`)
+  const juel = Object.entries(data.juel ?? {}).map(([k, f]) => `${k} ${num(f.value)}`).join(' · ')
+  if (juel) lines.push(`juel: ${juel}`)
   const rel = Object.entries(data.relations ?? {}).map(([k, f]) => {
     const v = num(f.value)
     const s = relationStance(v)
     return `${k} ${v >= 0 ? '+' : ''}${v} (${s.label} — ${s.hint})`
   }).join(' · ')
   if (rel) lines.push(`relations: ${rel}`)
-  // `juel` is crystallized history, not a mood gauge: it outlives the palam
+  // `param` is crystallized standing, not a mood gauge: it outlives the juel
   // that produced it, so the line says what it is rather than leaving the model
-  // to guess whether `grudge×60` is a current feeling or a permanent one.
-  const juel = Object.entries(data.juel ?? {}).filter(([, v]) => num(v) > 0).map(([k, v]) => `${k}×${v}`).join(' ')
-  if (juel) lines.push(`juel (permanent, spent only on growth): ${juel}`)
+  // to guess whether `defiance×60` is a current feeling or a settled one.
+  const param = Object.entries(data.param ?? {}).filter(([, v]) => num(v) > 0).map(([k, v]) => `${k}×${v}`).join(' ')
+  if (param) lines.push(`param (standing, settle-only): ${param}`)
   const grown = []
   for (const kind of ['stats', 'marks'])
     for (const [k, e] of Object.entries(data[kind] ?? {})) if (num(e.level) > 0) grown.push(`${k} Lv${e.level}`)

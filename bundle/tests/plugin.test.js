@@ -260,7 +260,7 @@ test('the persona_spawn tool registers the child it creates, in both modes', asy
 function draft(name) {
   return {
     'PERSONA.md': `---\nname: ${name}\ndescription: 一条线\ntriggers: []\nmbti: INTP\ninterests: []\nreactions: {}\n---\n\n## Layer 1 · Core Self\n\n- **identity**: 一条线\n`,
-    'STATE.md': `---\nbase:\n  energy: { max: 100, value: 80 }\npalam:\n  joy: { emit: favor, per: 100, decay: 20, value: 0 }\njuel:\n  favor: 0\nstats: {}\nmarks: {}\nrelations:\n  lead: { value: 0 }\nbuffs: []\n---\n\n## Notes\n`,
+    'STATE.md': `---\nbase:\n  energy: { max: 100, value: 80 }\njuel:\n  joy: { emit: affection, per: 100, decay: 20, value: 0 }\nparam:\n  affection: 0\nstats: {}\nmarks: {}\nrelations:\n  lead: { value: 0 }\nbuffs: []\n---\n\n## Notes\n`,
     'memory/core/identity.md': `---\ntitle: identity\ndisclosure: always\n---\n\nI am ${name}.\n`,
   }
 }
