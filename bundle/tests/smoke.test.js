@@ -201,7 +201,9 @@ test('gate prompts: imperative, signals, stage-1 directive', () => {
   // State pressure shows up as concrete hints.
   assert.match(one, /anger is running high \(40\)/)
   assert.match(one, /energy is low \(20\/100\)/)
-  assert.match(one, /distrust lead/)
+  // Relations speak through the stance band, which covers every value — not
+  // only the extremes the old rule bothered to name.
+  assert.match(one, /lead: hostile \(-40\) — suspicion first/)
   assert.match(one, /adrenaline/)
   // The state block now rides in the injected context, not a prompt section.
   assert.match(one, /persona context VERBATIM/)
@@ -211,13 +213,71 @@ test('gate prompts: imperative, signals, stage-1 directive', () => {
   const s2 = stageTwoPrompt({ name: 'alice' })
   assert.match(s2, /stage 2 of 2/)
   assert.match(s2, /Output ONLY the reply/)
+  // Voice precedence rides the transform: persona+state set tone; memory/context
+  // set content truthfulness and only shade the voice.
+  assert.match(s2, /first reference for how you sound/)
+  assert.match(s2, /content truthfulness/)
+  // The stage-1 VOICE line carries the same precedence into the monologue.
+  assert.match(one, /VOICE: tone \+ length.*first reference/)
   // The routine shape and the two verdict acks.
   assert.match(REPLY_DIRECTIVE, /No <thinking> block/)
   assert.match(REPLY_DIRECTIVE, /routine/)
+  // Voice precedence rides the routine directive too.
+  assert.match(REPLY_DIRECTIVE, /first reference for tone/)
+  assert.match(REPLY_DIRECTIVE, /content truthfulness/)
   assert.match(GATE_ACK_CRITICAL, /critical/)
   assert.match(GATE_ACK_ROUTINE, /routine/)
   // The mode notice is gone: the model rules the shape, code does not.
   assert.equal('modeNotice' in criticalPrompts, false)
+})
+
+test('relation stance: every value has a band, zero included', () => {
+  const { relationStance, RELATION_BANDS } = criticalPrompts
+  assert.equal(relationStance(-40).label, 'hostile')
+  assert.equal(relationStance(-5).label, 'cold')
+  // The value that most needs saying out loud: the old rule was silent here,
+  // so the persona's Layer-1 prose ("主人·几乎写死的高") won by default.
+  assert.equal(relationStance(0).label, 'unbonded')
+  assert.equal(relationStance(29).label, 'unbonded')
+  assert.equal(relationStance(30).label, 'warm')
+  assert.equal(relationStance(80).label, 'bonded')
+  // Total by construction: an unreadable value must not produce a hole.
+  assert.equal(relationStance(undefined).label, 'unbonded')
+  assert.equal(relationStance('nonsense').label, 'unbonded')
+  assert.equal(RELATION_BANDS[RELATION_BANDS.length - 1].max, Infinity)
+})
+
+test('signals: stance for every relation, carried juel flagged', () => {
+  const { signalsLine } = criticalPrompts
+  const sig = signalsLine({ state: { relations: { user: { value: 0 } }, juel: { grudge: 60 } } })
+  // The numeric speaker line is unchanged — the stance rides beside it.
+  assert.match(sig, /- speaker: known \(relations user=0\)/)
+  assert.match(sig, /- stance toward user: unbonded \(0\) — no standing yet — do not presume closeness/)
+  // Crystallized weight is not mood; it gets its own line so the gate sees it.
+  assert.match(sig, /- carried \(permanent, not this turn's mood\): grudge = 60/)
+  // A small balance stays out of the signal block — no noise for pocket change.
+  assert.doesNotMatch(signalsLine({ state: { juel: { favor: 5 } } }), /carried/)
+})
+
+test('state rules: a zero relation and a kept grudge reach the monologue', () => {
+  const { stageOnePrompt } = criticalPrompts
+  assert.match(
+    stageOnePrompt({ name: 'alice', state: { relations: { user: { value: 0 } } } }),
+    /user: unbonded \(0\) — no standing yet/)
+  assert.match(
+    stageOnePrompt({ name: 'alice', state: { juel: { grudge: 60 } } }),
+    /grudge is carried \(60\) — permanent, not this turn's mood/)
+  // The flat fallback still exists for a persona with nothing declared.
+  assert.match(stageOnePrompt({ name: 'alice' }), /state is flat/)
+})
+
+test('render: relations carry their stance, juel is labelled permanent', () => {
+  const out = st.renderStateSummary({
+    relations: { user: { value: 0 } },
+    juel: { grudge: 60 },
+  })
+  assert.match(out, /relations: user \+0 \(unbonded — no standing yet — do not presume closeness\)/)
+  assert.match(out, /juel \(permanent, spent only on growth\): grudge×60/)
 })
 
 test('route log: append-only JSONL sidecar, hostile ids contained', () => {

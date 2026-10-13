@@ -46,6 +46,47 @@ export const MBTI_REACTIONS = {
   P: { criticism: { palam: { anger: 0.7 } } },
 }
 
+/**
+ * Relation bands — what a relation value MEANS, for every value rather than
+ * only the extremes. The old rule spoke only at |v| ≥ 30, so a relation sitting
+ * at 0 — the value that most needs saying out loud ("no standing yet, do not
+ * presume closeness") — produced no line on any surface, and the model fell
+ * back on the persona's Layer-1 prose ("主人·几乎写死的高") instead of the
+ * number. One owner for the judgment; each call site formats its own prefix.
+ *
+ * Boundaries reuse the documented ±30 and add a bonded tier above +60.
+ */
+export const RELATION_BANDS = [
+  { max: -30, label: 'hostile', hint: 'suspicion first' },
+  { max: -1, label: 'cold', hint: 'cooling; no warmth volunteered' },
+  { max: 29, label: 'unbonded', hint: 'no standing yet — do not presume closeness' },
+  { max: 59, label: 'warm', hint: 'ease and generosity by default' },
+  { max: Infinity, label: 'bonded', hint: 'long trust — generosity is the reflex' },
+]
+
+/** The band a relation value falls in. Total: every number lands somewhere. */
+export function relationStance(value) {
+  const v = Number(value) || 0
+  return RELATION_BANDS.find(b => v <= b.max) ?? RELATION_BANDS[RELATION_BANDS.length - 1]
+}
+
+/**
+ * Carried weight worth flagging: `juel` at or above this is not a small balance
+ * but crystallized history (a grudge kept across settles), and it must reach
+ * the surfaces the model actually decides on — it was previously rendered only
+ * in the `juel:` line of the state block and read by no rule at all.
+ */
+export const JUEL_NOTABLE = 20
+
+/** `juel` entries at/above `min`, strongest first, capped. */
+export function carriedJuel(state = {}, min = JUEL_NOTABLE, limit = 3) {
+  return Object.entries(state.juel ?? {})
+    .map(([k, v]) => [k, Number(v) || 0])
+    .filter(([, v]) => v >= min)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+}
+
 /** Layers a reaction profile may address — the same three state_delta writes. */
 export const REACTION_LAYERS = ['palam', 'base', 'relations']
 
@@ -142,8 +183,13 @@ function stateRules(state = {}) {
   }
   for (const [k, r] of Object.entries(state.relations ?? {})) {
     const v = Number(r?.value) || 0
-    if (v <= -30) rules.push(`- you distrust ${k} (${v}) — suspicion first`)
-    else if (v >= 30) rules.push(`- you are warm toward ${k} (+${v}) — generosity first`)
+    const s = relationStance(v)
+    rules.push(`- ${k}: ${s.label} (${v > 0 ? '+' : ''}${v}) — ${s.hint}`)
+  }
+  // Carried weight: crystallized juel is permanent, so it belongs in the
+  // monologue's tuning even though no mood is driving it this turn.
+  for (const [k, v] of carriedJuel(state)) {
+    rules.push(`- ${k} is carried (${v}) — permanent, not this turn's mood; it sets your baseline until growth spends it`)
   }
   for (const b of state.buffs ?? []) rules.push(`- buff "${b.name}" is active — it is literally on your mind`)
   return rules.length ? rules.join('\n') : '- state is flat — let personality, not mood, carry this one'
@@ -151,13 +197,16 @@ function stateRules(state = {}) {
 
 /**
  * Deterministic gate inputs, rendered as `- ` lines. Cheap facts only — the
- * model reads the input itself; code must not score it.
+ * model reads the input itself; code must not score it. Two of the lines are
+ * interpretations rather than facts — the relation stance band and the carried
+ * `juel` flag — because a bare number the model has no band for is a number it
+ * does not act on.
  *
  * Every access is guarded (`?? {}`, `|| 0`) so a malformed state file yields a
  * thinner signal line instead of breaking the turn. The first-contact line is
  * always present, so this never returns '' — the caller may show it verbatim.
  *
- * @param opts.state - loaded STATE.md data (relations/palam/buffs)
+ * @param opts.state - loaded STATE.md data (relations/palam/juel/buffs)
  * @param opts.meta  - PERSONA.md frontmatter (interests)
  * @param opts.text  - this turn's newest real user input, truncated for display
  */
@@ -168,6 +217,14 @@ export function signalsLine({ state = {}, meta = {}, text = '' } = {}) {
     .map(([k, r]) => `${k}=${Number(r?.value) || 0}`)
     .join(', ')
   lines.push(known ? `- speaker: known (relations ${known})` : '- speaker: first contact — no relation record yet')
+  // The stance a value means, for every relation and every value. The numeric
+  // speaker line above is a fact; this is what it asks of the reply, so a
+  // relation at 0 can no longer pass through the gate unremarked.
+  for (const [k, r] of Object.entries(rel)) {
+    const v = Number(r?.value) || 0
+    const s = relationStance(v)
+    lines.push(`- stance toward ${k}: ${s.label} (${v > 0 ? '+' : ''}${v}) — ${s.hint}`)
+  }
   const interests = (meta.interests ?? []).filter(Boolean)
   if (interests.length) lines.push(`- interests (from your profile): ${interests.join(', ')}`)
   // 30 is the same number the retired table used as a verdict threshold; here it
@@ -178,6 +235,10 @@ export function signalsLine({ state = {}, meta = {}, text = '' } = {}) {
     .filter(([, v]) => v >= 30)
     .sort((a, b) => b[1] - a[1])
   if (hot.length) lines.push(`- ${hot.map(([k, v]) => `${k} = ${v}`).join(', ')} — already hot`)
+  // Crystallized weight, flagged separately from mood: a kept grudge outlives
+  // the anger that produced it, and it is invisible to every other surface.
+  const carried = carriedJuel(state)
+  if (carried.length) lines.push(`- carried (permanent, not this turn's mood): ${carried.map(([k, v]) => `${k} = ${v}`).join(', ')}`)
   const buffs = (state.buffs ?? []).map(b => b?.name).filter(Boolean)
   if (buffs.length) lines.push(`- active buffs: ${buffs.join(', ')}`)
   // JSON.stringify keeps a multi-line input on one signal line and makes the
@@ -211,7 +272,7 @@ ${signals ? `${signals}\n\n` : ''}The reason becomes part of the stage directive
 }
 
 /** Reply directive for a routine verdict (injected at the next step). */
-export const REPLY_DIRECTIVE = '[persona reply] The gate ruled this turn routine. Reply directly, in voice. No <thinking> block, no preamble, no self-check.'
+export const REPLY_DIRECTIVE = '[persona reply] The gate ruled this turn routine. Reply directly, in voice — but read the stance and carried lines in your persona context first: distance and warmth come from the current numbers, never from the persona\'s baseline claims about them. Your voice comes from persona + STATE, the first reference for tone; memory and the conversation supply content truthfulness, a remembered or implied mood never does. No <thinking> block, no preamble, no self-check.'
 
 /** Verdict acknowledgement returned by persona_gate. */
 export const GATE_ACK_CRITICAL = 'Verdict recorded: critical. The stage-1 directive arrives in your next input — do not reply yet.'
@@ -241,7 +302,7 @@ The block opens with four labeled lines, then expands freely if the turn is load
 STATE: copy the Current state block from your persona context VERBATIM (base, palam, relations, active buffs)
 TRIGGERS: what this input touches — values, wounds, stored memories
 REFUSAL: what your persona will NOT say here
-VOICE: tone + length for this reply, from Layer 2
+VOICE: tone + length for this reply — Layer 2 as re-tuned by STATE: persona and state are the first reference for how you sound; memory/context the second
 
 Inner-monologue tuning (MBTI: ${mbti || 'undeclared'}):
 ${mbtiRules(mbti)}
@@ -271,7 +332,7 @@ ${monologue}
 ` : ''}
 
 Convert that monologue into what you actually say:
-- Layer 2 Voice rules are in force: tone, sentence shape, taboos, default length.
+- Layer 2 Voice rules are in force: tone, sentence shape, taboos, default length — re-tuned by STATE. Persona and state are the first reference for how you sound; memory and context only set content truthfulness, and shade tone as the second reference.
 - The monologue's FEELING carries into the reply; its CONTENTS may be edited, withheld, or sharpened — you say what you'd say, not everything you thought.
 - Banned in the reply: numbers, stat names, psych jargon, mechanism nouns, the word "monologue", file paths, tool names. Embody, don't report.
 - Output ONLY the reply — no <thinking>, no preamble.`

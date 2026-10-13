@@ -30,4 +30,5 @@ Personas live at `.persona/<name>/` — `PERSONA.md` (identity + voice), `STATE.
 - A palam field that emits nothing, or a stat with unreachable `requires`.
 - Boot memory that explains the persona to itself — boot URIs should hold *identity anchors*, not documentation.
 - Memory written as objective decrees or imperative rules ("必须/禁止/【铁律】") — they are revocable experiences, not laws.
+- Voice rules stored in memory ("说话时总是……") — memory is content truthfulness and shades tone only as the second reference; voice belongs in Layer 2 as re-tuned by STATE.md, the first reference for how the persona sounds.
 - Boot URIs listing every node — boot holds existence anchors; the index section carries the catalog.

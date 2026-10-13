@@ -11,7 +11,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { splitFrontmatter, joinFrontmatter } from './frontmatter.js'
-import { renderReactions, REACTION_LAYERS } from './critical-prompts.js'
+import { renderReactions, REACTION_LAYERS, relationStance } from './critical-prompts.js'
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 
@@ -328,10 +328,17 @@ export function renderStateSummary(data, { reactions = {} } = {}) {
   }
   const palam = Object.entries(data.palam ?? {}).map(([k, f]) => `${k} ${num(f.value)}`).join(' · ')
   if (palam) lines.push(`palam: ${palam}`)
-  const rel = Object.entries(data.relations ?? {}).map(([k, f]) => `${k} ${num(f.value) >= 0 ? '+' : ''}${num(f.value)}`).join(' · ')
+  const rel = Object.entries(data.relations ?? {}).map(([k, f]) => {
+    const v = num(f.value)
+    const s = relationStance(v)
+    return `${k} ${v >= 0 ? '+' : ''}${v} (${s.label} — ${s.hint})`
+  }).join(' · ')
   if (rel) lines.push(`relations: ${rel}`)
+  // `juel` is crystallized history, not a mood gauge: it outlives the palam
+  // that produced it, so the line says what it is rather than leaving the model
+  // to guess whether `grudge×60` is a current feeling or a permanent one.
   const juel = Object.entries(data.juel ?? {}).filter(([, v]) => num(v) > 0).map(([k, v]) => `${k}×${v}`).join(' ')
-  if (juel) lines.push(`juel: ${juel}`)
+  if (juel) lines.push(`juel (permanent, spent only on growth): ${juel}`)
   const grown = []
   for (const kind of ['stats', 'marks'])
     for (const [k, e] of Object.entries(data[kind] ?? {})) if (num(e.level) > 0) grown.push(`${k} Lv${e.level}`)
