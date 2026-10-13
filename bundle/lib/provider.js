@@ -42,7 +42,8 @@ export function personaRequestText(cwd, name, libraryDir) {
  * Build the provider object registered on ctx.subagents.
  * @param innerName - the stock provider to delegate to ('spawn').
  */
-export function createPersonaProvider(name, innerName, resolveCwd, libraryDir) {
+export function createPersonaProvider(name, innerName, resolveCwd, libraryDir, cfg = {}) {
+  const reflect = cfg.closingReflection === 'always' || cfg.closingReflection === 'one-shot'
   return {
     name,
     inheritsParentContext: false,
@@ -60,7 +61,27 @@ export function createPersonaProvider(name, innerName, resolveCwd, libraryDir) {
       const parentId = request.parent?.session?.header?.id ?? request.parent?.id
       if (m && parentId) queueOneShot(parentId, m[1])
       const inner = this._inner()
-      return inner.start(request)
+      const run = await inner.start(request)
+      if (!reflect) return run
+      // The closing reflection adds a housekeeping turn AFTER the task turn.
+      // readResult picks the LAST assistant message, which would be the
+      // reflection's housekeeping chatter — swap output back to the last
+      // assistant message before the '[persona closing]' injection.
+      const result = run.result.then(res => {
+        const agent = run.localAgent
+        if (!agent || res.output?.length === 0) return res
+        try {
+          const evs = agent.session.snapshotEvents()
+          const isClosing = e => e.type === 'user/message'
+            && (e.data?.content ?? []).some(b => b?.type === 'text' && b.text?.startsWith('[persona closing]'))
+          const cut = evs.findIndex(isClosing)
+          if (cut < 0) return res
+          const prior = evs.slice(0, cut).reverse()
+            .find(e => e.type === 'assistant/message' && e.data?.message?.content?.length)
+          return prior ? { ...res, output: prior.data.message.content } : res
+        } catch { return res }
+      })
+      return { ...run, result }
     },
 
     async prepareContinuable({ sessionId, parent }) {

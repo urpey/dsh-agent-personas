@@ -40,7 +40,7 @@ export default {
     agent?.session?.header?.cwd ?? process.cwd()
 
   // ---------------------------------------------------------------- provider
-  const provider = createPersonaProvider(cfg.providerName, 'spawn', resolveCwd, cfg.libraryDir)
+  const provider = createPersonaProvider(cfg.providerName, 'spawn', resolveCwd, cfg.libraryDir, cfg)
   provider.bindInner((n) => ctx.subagents.getProvider(n))
   ctx.subagents.registerProvider(provider)
 

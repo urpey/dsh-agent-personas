@@ -101,3 +101,40 @@ returns { palamDelta, juelGained, levelUps }
 ```
 
 Delta magnitude guidance lives in `bundle/prompts/protocol.md`: ±1–5 nudge, ±5–15 notable, ±15–30 significant, ±30–50 severe.
+
+## Runtime mechanics (implemented)
+
+Prompt sections injected per equipped agent (agent-scoped, in assembly order):
+
+| Section | Order | Kind | Content |
+|---|---|---|---|
+| `deployment:persona-prefix` | 0 | static | `persona-profile:<name>` marker + full PERSONA.md. Skipped when the spawn provider already mounted it via `request.persona`. |
+| `persona:state` | 480 | dynamic fn | Rendered STATE summary — base/max, palam, relations, active buffs. Re-evaluated every assembly so `state_delta` results show next step. |
+| `persona:boot` | 481 | dynamic fn | MEMORY.md `Boot URIs` expanded to full node bodies. |
+| `persona:memory-index` | 482 | dynamic fn | Compact catalog: `- uri (pN [alias→x]) — disclosure [triggers: a, b]`. Lets the model `memory_read` on demand without holding all content. |
+| `persona:protocol` | 483 | static | `prompts/protocol.md`: dual-process contract, state/memory/closing contracts. |
+
+Turn hooks (`agent/pre-step`, `agent/turn-stopping`):
+
+- **Buff tick** — first step of each new turn decrements `buffs[].duration`; expired names are injected as `[persona] buffs expired: …`.
+- **Memory recall** — each step scans the newest user-visible message for node `triggers` (case-insensitive, ≤3 hits, once per URI per session). Hits arrive as `[persona recall] memory://path` + body in the step's input — already-read memory, not a tool call.
+- **Grounding** — when `config.groundingInterval > 0`, `prompts/grounding.md` is injected every Nth step.
+- **Closing reflection** — when `config.closingReflection` matches the mode (`one-shot` default), turn end queues `prompts/closing.md` as a followup turn: the agent `state_settle`s and `memory_create`s before stopping.
+- **One-shot output rewind** — the reflection adds a housekeeping turn, which would make `readResult` return its chatter instead of the task answer. The `persona` provider wraps `run.result`: if a `[persona closing]` user message exists in the session log, `output` is replaced with the last assistant message BEFORE it.
+
+Dual-process protocol (prompts/protocol.md): every reply runs an inner pass in the reasoning channel — `STATE:` verbatim copy, `TRIGGERS:`, `REFUSAL:`, `VOICE:` — then the outer persona voice. Runtimes without a reasoning channel emit an unmarked reflective paragraph instead. State deltas are recorded at the moment they happen, not batched.
+
+Config (`cordis.patch.yml` row `persona-system`, user patch can override):
+
+| Key | Default | Effect |
+|---|---|---|
+| `libraryDir` | `.persona` | Persona library root, resolved against workspace cwd |
+| `groundingInterval` | `0` | Steps between grounding injections (0 = off) |
+| `closingReflection` | `one-shot` | `one-shot` / `always` / `never` |
+| `providerName` | `persona` | `ctx.subagents` provider name |
+
+## Known limitations
+
+- `.persona` write guard is a substring check on tool arguments, not a syscall-level jail.
+- `spawn_teammate` does not forward a `persona` request field — persona-bound teammates must come from `persona_spawn` or `/persona spawn`.
+- `install_bundle` on an already-linked directory reports `ambiguous-install`; `remove_bundle` first, or rely on HMR (watch root must include the bundle dir).

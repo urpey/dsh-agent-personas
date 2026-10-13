@@ -82,9 +82,27 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
       try { return memory.renderBoot(personaDir) } catch { return '' }
     },
   })
+  // Compact catalog of every node: uri, priority, disclosure, triggers.
+  // Lets the model `memory_read` on demand instead of holding all content.
+  section({
+    name: 'persona:memory-index',
+    order: 482,
+    text: () => {
+      try {
+        const nodes = memory.listNodes(personaDir)
+        if (!nodes.length) return ''
+        const lines = nodes.map(n => {
+          const t = Array.isArray(n.triggers) && n.triggers.length ? ` [triggers: ${n.triggers.join(', ')}]` : ''
+          const d = n.disclosure ? ` — ${n.disclosure}` : ''
+          return `- ${n.uri} (p${n.priority ?? 3}${n.aliasOf ? ` alias→${n.aliasOf}` : ''})${d}${t}`
+        })
+        return `## Memory index\n${lines.join('\n')}`
+      } catch { return '' }
+    },
+  })
   section({
     name: 'persona:protocol',
-    order: 482,
+    order: 483,
     text: readPromptAsset('protocol.md'),
   })
 
@@ -212,9 +230,33 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
     agentCtx.logger?.warn?.(`[persona:${name}] turn ${turn} step ${step} error:`, error)
   }))
 
-  // ---- turn lifecycle: buff tick + optional grounding --------------------
+  // ---- turn lifecycle: buff tick + optional grounding + memory recall ----
   let lastTurn = -1
+  const recalled = new Set()          // uris injected this session — no repeats
   const groundingText = cfg.groundingInterval > 0 ? readPromptAsset('grounding.md').trim() : ''
+
+  /** Text of the newest user-visible message in this step's input. */
+  const latestText = (decision) => {
+    const msgs = decision?.messages ?? []
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const blocks = msgs[i]?.content
+      if (!Array.isArray(blocks)) continue
+      const text = blocks.filter(b => b?.type === 'text').map(b => b.text).join('\n')
+      if (text) return text
+    }
+    return ''
+  }
+
+  /** Memory nodes whose triggers appear in the input (case-insensitive). */
+  const recallHits = (text) => {
+    if (!text) return []
+    const lower = text.toLowerCase()
+    return memory.listNodes(personaDir)
+      .filter(n => !n.aliasOf && !recalled.has(n.uri))
+      .filter(n => (n.triggers ?? []).some(t => t && lower.includes(String(t).toLowerCase())))
+      .slice(0, 3)
+  }
+
   reg(agentCtx.on('agent/pre-step', async ({ turn, step }, next) => {
     if (turn !== lastTurn) {
       lastTurn = turn
@@ -222,10 +264,18 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
       if (expired.length) agent.inject?.(userMsg(`[persona] buffs expired: ${expired.join(', ')}`))
     }
     const decision = await next()
-    if (groundingText && decision.kind === 'enter' && step % cfg.groundingInterval === 0) {
-      return { ...decision, messages: [...decision.messages, userMsg(groundingText)] }
+    if (decision.kind !== 'enter') return decision
+    const extra = []
+    // Trigger-based recall: inject full node bodies for hits not yet shown.
+    for (const hit of recallHits(latestText(decision))) {
+      try {
+        const node = memory.readNode(personaDir, hit.uri)
+        recalled.add(hit.uri)
+        extra.push(userMsg(`[persona recall] ${hit.uri}\n${node.content ?? ''}`.trimEnd()))
+      } catch { /* node vanished between list and read */ }
     }
-    return decision
+    if (groundingText && step % cfg.groundingInterval === 0) extra.push(userMsg(groundingText))
+    return extra.length ? { ...decision, messages: [...decision.messages, ...extra] } : decision
   }))
 
   // ---- closing reflection (one-shot and opt-in) ---------------------------
