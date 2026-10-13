@@ -109,7 +109,7 @@ Prompt sections injected per equipped agent (agent-scoped, in assembly order):
 | Section | Order | Kind | Content |
 |---|---|---|---|
 | `deployment:persona-prefix` | 0 | static | `persona-profile:<name>` marker + full PERSONA.md. Skipped when the spawn provider already mounted it via `request.persona`. |
-| `persona:state` | 480 | dynamic fn | Rendered STATE summary — base/max, palam, relations, active buffs. Re-evaluated every assembly so `state_delta` results show next step. |
+| `persona:state` | 480 | dynamic fn | Rendered STATE summary — base/max, palam, relations, active buffs. Internal dashboard only: the protocol forbids speaking numbers/stat names in visible text; state shapes tone, not content. |
 | `persona:boot` | 481 | dynamic fn | MEMORY.md `Boot URIs` expanded to full node bodies. |
 | `persona:memory-index` | 482 | dynamic fn | Compact catalog: `- uri (pN [alias→x]) — disclosure [triggers: a, b]`. Capped at 30 rows by priority; overflow reachable via `memory_search`. |
 | `persona:protocol` | 483 | static | `prompts/protocol.md`: dual-process contract, state/memory/closing contracts. |
