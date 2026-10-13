@@ -2,7 +2,7 @@
   "name": "dsh-agent-personas",
   "version": "0.1.0",
   "private": true,
-  "description": "Persistent persona engine for DeepSeek Harness — three-layer persona profiles, a layered numeric state system, and a URI memory tree under .persona/<name>/",
+  "description": "Persistent persona engine for DeepSeek Harness — three-layer persona profiles, a layered integer state system, and a URI memory tree under .persona/<name>/",
   "type": "module",
   "license": "MIT",
   "author": "urpey",

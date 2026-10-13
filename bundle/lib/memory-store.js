@@ -76,7 +76,7 @@ export function updateNode(personaDir, uri, { oldString, newString, append, prio
   if (oldString !== undefined) {
     if (oldString === '') throw new Error('old_string must not be empty')
     // Ellipsis patch: "start...end" replaces from `start` through `end`
-    // (inclusive) with newString — mirrors the URI-addressed patch contract.
+    // (inclusive) with newString — mirrors the ellipsis-patch contract.
     const parts = oldString.split(/\.{3}|…/)
     if (parts.length === 2) {
       const [head, tail] = parts

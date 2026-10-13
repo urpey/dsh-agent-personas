@@ -1,5 +1,5 @@
 /**
- * layered integer state over STATE.md.
+ * Layered integer state over STATE.md.
  *
  * Layers: base (0..max), juel (signed -100..∞ mood water, crystallizes/burns
  * param on settle), param (persistent standing, settle-only),

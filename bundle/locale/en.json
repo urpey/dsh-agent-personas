@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Persona System",
-    "description": "Persistent persona engine: .persona/ archives with three-layer profiles, layered numeric state, and a URI memory tree."
+    "description": "Persistent persona engine: .persona/ archives with three-layer profiles, layered integer state, and a URI memory tree."
   }
 }

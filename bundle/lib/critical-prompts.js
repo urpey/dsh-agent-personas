@@ -9,9 +9,9 @@
  * (`REPLY_DIRECTIVE`), and the transform handed back by `inner_commit`
  * (`stageTwoPrompt`).
  *
- * The monologue is parameterized
- * on this system's knobs: MBTI profile + live STATE (juel peaks, base gauges,
- * relations, buffs) instead of trait thresholds. The reply carries the
+ * The monologue is parameterized on this system's knobs: MBTI profile + live
+ * STATE (juel peaks, base gauges, relations, buffs) instead of a trait model
+ * thresholds. The reply carries the
  * monologue's feeling through Layer 2 voice, which is always in the prompt —
  * so no second call is needed to apply the style matrix.
  */
