@@ -19,8 +19,8 @@
 
 ## 需求
 
-- DeepSeek Harness ≥ `0.2.0-rc.1`
-- pnpm ≥ 10.9（下面的 `#path:` git 子目錄安裝需要；GUI 外掛管理器自帶的 pnpm 已滿足）
+- DeepSeek Harness ≥ `0.2.0-rc.1`（宣告為**可選** peer——由執行中的 harness 提供，pnpm 不會另外下載一份）
+- pnpm 10 或更新——下面的 `path:` git 子目錄 spec 需要它（已在 pnpm 11.7 實測；GUI 外掛管理器自帶的 pnpm 滿足）
 - `/personas` 選擇器需要 **web** profile；host 側人格能力在任何提供 `agents`、`commands`、`subagents`、`tools`、`systemPrompt`、`llm` 服務的 profile 下都能運作
 
 ## 安裝
@@ -28,13 +28,13 @@
 bundle 位於儲存庫的 `bundle/` 子目錄，用 git 子目錄 spec 安裝：
 
 ```sh
-dsh plugin --profile web add 'github:urpey/dsh-agent-personas#path:bundle'
+dsh plugin --profile web add 'github:urpey/dsh-agent-personas#path:/bundle'
 ```
 
 要可重現的安裝，釘一個 commit：
 
 ```sh
-dsh plugin --profile web add 'github:urpey/dsh-agent-personas#<commit-sha>:bundle'
+dsh plugin --profile web add 'github:urpey/dsh-agent-personas#<commit-sha>&path:/bundle'
 ```
 
 本套件是純 JavaScript、零相依——安裝時不跑任何建置腳本，也不需要 `allowBuilds` 條目。

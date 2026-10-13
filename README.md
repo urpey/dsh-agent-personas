@@ -19,8 +19,8 @@ Equip a persona and the agent gains an identity, a voice, a mood system that dri
 
 ## Requirements
 
-- DeepSeek Harness ≥ `0.2.0-rc.1`
-- pnpm ≥ 10.9 (needed for the `#path:` git-subdirectory install below; the GUI plugin manager bundles a compatible pnpm)
+- DeepSeek Harness ≥ `0.2.0-rc.1` (declared as an *optional* peer — the running harness supplies it, and pnpm never downloads a second copy)
+- pnpm 10 or newer — the `path:` git-subdirectory spec below needs it (verified on pnpm 11.7; the GUI plugin manager bundles a compatible pnpm)
 - The **web** profile for the `/personas` picker; host-side persona features work in any profile that provides `agents`, `commands`, `subagents`, `tools`, `systemPrompt` and `llm` services
 
 ## Install
@@ -28,13 +28,13 @@ Equip a persona and the agent gains an identity, a voice, a mood system that dri
 The bundle lives in `bundle/` inside this repository, so install it with a git subdirectory spec:
 
 ```sh
-dsh plugin --profile web add 'github:urpey/dsh-agent-personas#path:bundle'
+dsh plugin --profile web add 'github:urpey/dsh-agent-personas#path:/bundle'
 ```
 
 Pin a commit for a reproducible install:
 
 ```sh
-dsh plugin --profile web add 'github:urpey/dsh-agent-personas#<commit-sha>:bundle'
+dsh plugin --profile web add 'github:urpey/dsh-agent-personas#<commit-sha>&path:/bundle'
 ```
 
 The package is pure JavaScript with zero dependencies — no build step runs on install and no `allowBuilds` entry is needed.

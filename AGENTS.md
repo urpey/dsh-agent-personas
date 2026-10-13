@@ -10,7 +10,7 @@ A DeepSeek Harness plugin bundle that gives agents a persistent persona — a th
 - **Memory tree.** `memory://<path>` ↔ `memory/<path>.md`, node frontmatter = `title`/`priority`/`disclosure`/`triggers`/`aliasOf`. Pull via `memory_read`/`search`/`list` (+ `children`/`seeAlso` adjacency); push via trigger-matched `[persona recall]` injections; `MEMORY.md` holds authored Boot URIs plus a derived Index section.
 - **Compaction.** `/persona compact <name>` is ONE in-process `ctx.llm.stream` call (`purpose: 'compaction'`) over the whole tree → `structured_output` edit plan → `validatePlan` → `applyPlan` → `syncIndex`. No child session, no binding row.
 - **Authoring.** The `persona-authoring` skill (registered at startup, global scope) runs a fixed collect → draft → confirm → `persona_save` → equip-ask flow. `persona_save` is the **only** agent write channel into `.persona/**` — file tools are denied there in equipped sessions — and creates only, never overwrites.
-- **Surfaces.** Host: `/persona list|new|use|off|spawn|compact|status`. Client: a `/personas` popup picker (`client.js`) with localized rows, per-persona actions, and an 已装备 badge read from the binding ledger. Model: `persona_list`, `persona_spawn`, `persona_save`, `persona_use`, plus the `persona` subagent provider (wraps `spawn`).
+- **Surfaces.** Host: `/persona list|new [--from <example>]|examples|use|off|spawn|compact|status`. Client: a `/personas` popup picker (`client.js`) with localized rows, per-persona actions, and an 已装备 badge read from the binding ledger. Model: `persona_list`, `persona_spawn`, `persona_save`, `persona_use`, plus the `persona` subagent provider (wraps `spawn`).
 - **Persistence sidecars.** `.persona/.bindings/` (session→persona ledger) and `.persona/.routes/` (gate verdict JSONL) are files, deliberately **not** session events — an out-of-tree event type can't be marked `ignorable` and would break log restore.
 
 ## Bundle structure
@@ -41,6 +41,9 @@ bundle/
     frontmatter.js     minimal YAML-subset frontmatter parser/dumper (the grammar contract)
   prompts/             injected assets: protocol.md, closing.md, compact.md, grounding.md
   templates/           PERSONA.md / STATE.md / MEMORY.md archive skeletons
+  examples/            complete shipped archives (deepseek) copied into a workspace
+                       library by `/persona new [--from <example>]` — see
+                       listExamples/createPersonaFromExample in lib/persona.js
   skills/persona-authoring/  registered via ctx.inject(['skills']) at apply time
   locale/              zh.json / en.json dictionaries for the picker
   tests/               node --test tests/*.test.js — plugin, commands, picker,
