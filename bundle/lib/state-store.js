@@ -45,6 +45,7 @@ function validateShape(d, file) {
       if (e.value !== undefined && !isNum(e.value)) bad(`${path}.value`, 'must be a number')
       if (e.max !== undefined && !isNum(e.max)) bad(`${path}.max`, 'must be a number')
       if (layer === 'base' && e.tick !== undefined && !isNum(e.tick)) bad(`${path}.tick`, 'must be a number')
+      if (layer === 'base' && e.tick_every !== undefined && !isNum(e.tick_every)) bad(`${path}.tick_every`, 'must be a number')
       if (e.level !== undefined && !isNum(e.level)) bad(`${path}.level`, 'must be a number')
       if (e.requires !== undefined) {
         if (!isMap(e.requires)) bad(`${path}.requires`, 'must be a map of juel costs')
@@ -221,22 +222,28 @@ export function tickBuffs(personaDir) {
 }
 
 /**
- * Apply each base field's per-turn tick — the body's own clock. Only saves when
- * something actually moved, so an idle turn never rewrites the file (and never
- * drops its comments). Returns the applied drifts.
+ * Apply each base field's per-turn tick — the body's own clock. `tick_every`
+ * spreads a tick over N turns (`tick: -1, tick_every: 2` = -1 every second
+ * turn), decided by the session's 1-based turn number, so the cadence needs no
+ * stored phase and survives a restart. Called without a turn number the tick
+ * applies on every call (direct tooling/tests). Only saves when something
+ * actually moved, so an idle turn never rewrites the file (and never drops its
+ * comments). Returns the applied drifts.
  */
-export function tickBase(personaDir) {
+export function tickBase(personaDir, { turn } = {}) {
   const st = loadState(personaDir)
   const d = st.data
   const drifts = []
   for (const [k, f] of Object.entries(d.base ?? {})) {
     const tick = Math.trunc(num(f.tick))
     if (!tick) continue
+    const every = Math.max(1, Math.trunc(num(f.tick_every ?? 1)))
+    if (every > 1 && turn !== undefined && turn % every !== 0) continue
     const before = num(f.value)
     const after = clamp(before + tick, 0, num(f.max ?? 100))
     if (after !== before) {
       f.value = after
-      drifts.push({ key: k, before, after, tick })
+      drifts.push({ key: k, before, after, tick, every })
     }
   }
   if (drifts.length) save(st)
@@ -312,9 +319,10 @@ export function renderStateSummary(data, { reactions = {} } = {}) {
   for (const [k, f] of Object.entries(data.base ?? {})) {
     const { base, bonus, effective } = effectiveValue(data, 'base', k)
     const tick = Math.trunc(num(f.tick))
+    const every = Math.max(1, Math.trunc(num(f.tick_every ?? 1)))
     const parts = [
       bonus ? `${base}${bonus >= 0 ? '+' : ''}${bonus}` : '',
-      tick ? `${tick > 0 ? '+' : ''}${tick}/t` : '',
+      tick ? `${tick > 0 ? '+' : ''}${tick}/${every > 1 ? `${every}t` : 't'}` : '',
     ].filter(Boolean)
     lines.push(`${k}: ${effective}/${f.max ?? 100}` + (parts.length ? ` (${parts.join(', ')})` : ''))
   }

@@ -351,7 +351,7 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
       lastTurn = turn
       // Turn-level body clock: buffs age, base fields drift — one write per turn.
       const expired = state.tickBuffs(personaDir)
-      state.tickBase(personaDir)
+      state.tickBase(personaDir, { turn })
       if (expired.length) agent.inject?.(userMsg(`[persona] buffs expired: ${expired.join(', ')}`))
       if (reactionsError) {
         agent.inject?.(userMsg(`[persona] PERSONA.md reactions ignored — ${reactionsError}`))

@@ -272,6 +272,32 @@ test('base tick: per-turn drift, clamped, no write when idle', () => {
   assert.throws(() => st.loadState(dir), /base\.energy\.tick must be a number/)
 })
 
+test('base tick_every: a slow clock keyed to the 1-based turn number', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'persona-slow-'))
+  writeFileSync(join(dir, 'STATE.md'), [
+    '---',
+    'base:',
+    '  satiety: { max: 100, value: 70, tick: -1, tick_every: 2 }',
+    '  energy:  { max: 100, value: 50, tick: -1 }',
+    '---',
+    '',
+  ].join('\n'))
+  // Odd turns: only the every-turn field moves.
+  assert.deepEqual(st.tickBase(dir, { turn: 1 }).map(d => d.key), ['energy'])
+  // Even turn: both move — satiety loses 1 per two turns.
+  assert.deepEqual(st.tickBase(dir, { turn: 2 }).map(d => d.key), ['satiety', 'energy'])
+  const d = st.loadState(dir).data
+  assert.equal(d.base.satiety.value, 69)
+  assert.equal(d.base.energy.value, 48)
+  // The cadence is visible in the render.
+  assert.match(st.renderStateSummary(d), /satiety: 69\/100 \(-1\/2t\)/)
+  // Called without a turn number the tick applies immediately (tooling/tests).
+  assert.deepEqual(st.tickBase(dir).map(k => k.key), ['satiety', 'energy'])
+  // Malformed period fails at load.
+  writeFileSync(join(dir, 'STATE.md'), '---\nbase:\n  satiety: { max: 100, value: 70, tick: -1, tick_every: often }\n---\n')
+  assert.throws(() => st.loadState(dir), /base\.satiety\.tick_every must be a number/)
+})
+
 test('render: tick suffix only when set', () => {
   const data = { base: { energy: { max: 100, value: 40, tick: -1 }, focus: { max: 100, value: 50 } } }
   const line = st.renderStateSummary(data)

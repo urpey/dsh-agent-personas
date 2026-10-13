@@ -112,6 +112,12 @@ session at `tick: -1` drains about half a gauge. A turn that drifts nothing does
 not rewrite the file (so its comments survive). No floor above 0 — a linear drain
 pins at empty rather than stopping at "exhausted but alive".
 
+`tick_every` (optional integer, default `1`) spreads a tick over N turns:
+`tick: -1, tick_every: 2` loses one point every second turn. The cadence is keyed
+to the session's 1-based turn number, so it needs no stored phase and survives a
+restart; the render shows it (`satiety: 67/100 (-1/2t)`). Called without a turn
+number — direct tooling, tests — the tick applies immediately.
+
 ## Reactions — scenario → field → magnitude
 
 `PERSONA.md` frontmatter declares how this persona converts an event into state:
