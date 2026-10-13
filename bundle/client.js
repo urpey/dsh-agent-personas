@@ -19,7 +19,7 @@
  */
 
 window.__ModuleLoader__.load({
-  id: '@local/dsh-agent-personas',
+  id: 'dsh-agent-personas',
   factory(require) {
     const React = require('react')
     const h = React.createElement
@@ -66,6 +66,7 @@ window.__ModuleLoader__.load({
     const ACTION_ROWS = [
       { id: 'action:off', label: 'label.off', detail: 'detail.off', line: '/persona off' },
       { id: 'action:new', label: 'label.new', detail: 'detail.new', kickoff: 'prompt.new' },
+      { id: 'action:newExample', label: 'label.newExample', detail: 'detail.newExample', line: '/persona new --from deepseek' },
     ]
 
     /** Dictionary namespace owned by this bundle's browser half. */
@@ -78,10 +79,12 @@ window.__ModuleLoader__.load({
       'group.actions': '操作',
       'label.status': '查看当前状态',
       'label.new': '新建人格档案…',
+      'label.newExample': '从范例创建「deepseek」',
       'label.off': '卸下当前人格',
       'label.spawnFor': '派生「{name}」',
       'label.compactFor': '压缩「{name}」的记忆',
       'detail.new': '由 agent 引导创建：提供要求或粘贴人设资料',
+      'detail.newExample': '复制内置的鲸鱼少女人格示例（含记忆树）',
       'detail.off': '撤销本会话的装备与工具注册',
       'detail.spawnFor': '以该人格派生一个子智能体',
       'detail.compactFor': '整理该人格的记忆树',
@@ -104,10 +107,12 @@ window.__ModuleLoader__.load({
       'group.actions': 'Actions',
       'label.status': 'Show current status',
       'label.new': 'Create a persona archive…',
+      'label.newExample': 'Create the "deepseek" example',
       'label.off': 'Unequip the current persona',
       'label.spawnFor': 'Spawn "{name}"',
       'label.compactFor': 'Compact "{name}" memory',
       'detail.new': 'Agent-guided: describe what you want or paste persona material',
+      'detail.newExample': 'Copy the bundled whale-girl example persona (memory tree included)',
       'detail.off': 'Drop this session\'s equipping and tool registrations',
       'detail.spawnFor': 'Spawn a subagent running as that persona',
       'detail.compactFor': 'Tidy that persona\'s memory tree',

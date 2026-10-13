@@ -2,7 +2,7 @@
  * Persona library access: `.persona/<name>/` resolution, profile loading,
  * lazy skeleton creation, and the rendered system-prompt text for a persona.
  */
-import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs'
+import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, cpSync } from 'node:fs'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { splitFrontmatter } from './frontmatter.js'
@@ -11,6 +11,7 @@ import { splitFrontmatter } from './frontmatter.js'
 export const BUNDLE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const TEMPLATES = join(BUNDLE_ROOT, 'templates')
 const PROMPTS = join(BUNDLE_ROOT, 'prompts')
+const EXAMPLES = join(BUNDLE_ROOT, 'examples')
 
 export const PROFILE_MARKER = 'persona-profile:'
 
@@ -73,9 +74,24 @@ export function ensurePersona(cwd, name, libraryDir = '.persona') {
   return dir
 }
 
+/**
+ * List example personas shipped inside the bundle (`bundle/examples/<name>/`).
+ * Each is a complete archive — PERSONA/STATE/MEMORY plus its memory tree —
+ * meant to be copied into a workspace library by `createPersonaFromExample`.
+ */
+export function listExamples() {
+  if (!existsSync(EXAMPLES)) return []
+  return readdirSync(EXAMPLES, { withFileTypes: true })
+    .filter(d => d.isDirectory() && existsSync(join(EXAMPLES, d.name, 'PERSONA.md')))
+    .map(d => {
+      const { data } = splitFrontmatter(readFileSync(join(EXAMPLES, d.name, 'PERSONA.md'), 'utf8'))
+      return { name: d.name, description: String(data.description ?? '') }
+    })
+}
+
 /** The one owner of "what a persona name may be": the directory name, the
  *  `/persona use <name>` argument and the picker row all read this rule. */
-function assertPersonaName(name) {
+export function assertPersonaName(name) {
   if (typeof name !== 'string' || !/^[\w-]+$/.test(name)) {
     throw new Error(`invalid persona name "${name}": use letters, digits, _ or -`)
   }
@@ -89,6 +105,33 @@ export function createPersona(cwd, name, description = '', libraryDir = '.person
   writeFileSync(join(dir, 'PERSONA.md'),
     readFileSync(join(TEMPLATES, 'PERSONA.md'), 'utf8')
       .replaceAll('{{name}}', name).replaceAll('{{description}}', description), 'utf8')
+  return dir
+}
+
+/**
+ * Copy a bundled example archive (`bundle/examples/<example>/`) into the
+ * library as persona `name`; the example keeps its memory tree. The copied
+ * PERSONA.md `name:` field is rewritten to the new archive name so frontmatter
+ * and directory stay in step. Fails if the persona already exists or the
+ * example is unknown.
+ */
+export function createPersonaFromExample(cwd, name, example, libraryDir = '.persona') {
+  assertPersonaName(name)
+  assertPersonaName(example)
+  if (personaExists(cwd, name, libraryDir)) throw new Error(`persona "${name}" already exists`)
+  const source = join(EXAMPLES, example)
+  if (!existsSync(join(source, 'PERSONA.md'))) {
+    const known = listExamples().map(e => e.name).join(', ') || '(none)'
+    throw new Error(`unknown example "${example}" — available: ${known}`)
+  }
+  const dir = personaDir(cwd, name, libraryDir)
+  cpSync(source, dir, { recursive: true })
+  const profile = join(dir, 'PERSONA.md')
+  const text = readFileSync(profile, 'utf8')
+  const renamed = /^name:[^\n]*$/m.test(text)
+    ? text.replace(/^name:[^\n]*$/m, `name: ${name}`)
+    : text.replace(/^(---\r?\n)/, `$1name: ${name}\n`)
+  writeFileSync(profile, renamed, 'utf8')
   return dir
 }
 

@@ -250,13 +250,13 @@ test('picker degrades to the action rows when the library or the remote is absen
   const empty = mkdtempSync(join(tmpdir(), 'persona-empty-'))
   const missing = await rowsOf(mount(empty))
   // No archives: the status view plus the argument-free actions remain.
-  assert.deepEqual(missing.map(row => row.id), ['action:status', 'action:off', 'action:new'])
+  assert.deepEqual(missing.map(row => row.id), ['action:status', 'action:off', 'action:new', 'action:newExample'])
   assert.equal(missing.every(row => row.group.name === 'actions'), true)
   assert.equal(missing[0].detail, '本会话未装备人格 · 库内 0 个人格')
 
   // A carrier failure on the listing is not an exception: the popup still opens.
   const failed = await rowsOf(mount(empty, { failList: true }))
-  assert.deepEqual(failed.map(row => row.id), ['action:status', 'action:off', 'action:new'])
+  assert.deepEqual(failed.map(row => row.id), ['action:status', 'action:off', 'action:new', 'action:newExample'])
 })
 
 test('selecting a persona runs the host command for it', async () => {
@@ -269,6 +269,10 @@ test('selecting a persona runs the host command for it', async () => {
 
   await mounted.contribution.ui.onSelect(rows.find(row => row.id === 'action:off'), { sessionId: 'session-a' })
   assert.deepEqual(mounted.executed, ['/persona use alice', '/persona off'])
+
+  // The example row carries a fixed host line — no free text to collect.
+  await mounted.contribution.ui.onSelect(rows.find(row => row.id === 'action:newExample'), { sessionId: 'session-a' })
+  assert.deepEqual(mounted.executed, ['/persona use alice', '/persona off', '/persona new --from deepseek'])
 
   await assert.rejects(
     () => mounted.contribution.ui.onSelect({ id: 'unknown' }, { sessionId: 'session-a' }),

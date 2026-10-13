@@ -512,3 +512,68 @@ test('HMR: a reloaded command context still sees and removes the equip', async (
   assert.equal(sameAgent.ctx.registered.size, 0, 'off must actually dispose the tool registrations')
   assert.equal(sameAgent.ctx.sections.length, 0, 'off must actually dispose the prompt sections')
 })
+
+test('new --from copies a bundled example archive, memory tree included', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'persona-ex-'))
+  const { run } = harness(root)
+
+  const created = await run('new --from deepseek')
+  assert.equal(created.kind, 'success', `example creation failed: ${JSON.stringify(created)}`)
+  assert.match(created.text, /from example "deepseek"/)
+
+  const dir = join(root, '.persona', 'deepseek')
+  // It is a real archive: persona_exists would see it, and the frontmatter
+  // parses through the same minimal grammar savePersona validates with.
+  const profile = readFileSync(join(dir, 'PERSONA.md'), 'utf8')
+  assert.match(profile, /^name: deepseek$/m)
+  assert.match(profile, /^description:/m)
+  // The shipped memory tree came along — an example with no memory would be
+  // a profile, not a persona.
+  assert.equal(existsSync(join(dir, 'memory', 'core', 'identity.md')), true)
+  assert.equal(existsSync(join(dir, 'STATE.md')), true)
+  assert.equal(existsSync(join(dir, 'MEMORY.md')), true)
+
+  // Equipping it works — this is the whole point of the example.
+  const equipped = await run('use deepseek')
+  assert.equal(equipped.kind, 'success', `use failed: ${JSON.stringify(equipped)}`)
+})
+
+test('new --from renames the archive: name and frontmatter stay in step', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'persona-ex-rename-'))
+  const { run } = harness(root)
+
+  const created = await run('new moby --from deepseek')
+  assert.equal(created.kind, 'success', JSON.stringify(created))
+  const profile = readFileSync(join(root, '.persona', 'moby', 'PERSONA.md'), 'utf8')
+  assert.match(profile, /^name: moby$/m)
+  assert.doesNotMatch(profile, /^name: deepseek$/m)
+})
+
+test('new --from refuses a takeover: an existing archive is never overwritten', async () => {
+  const root = workspace()   // already holds a "deepseek" persona
+  const { run } = harness(root)
+  const result = await run('new --from deepseek')
+  assert.equal(result.kind, 'error')
+  assert.match(result.text, /already exists/)
+  // And the pre-existing archive is untouched.
+  const profile = readFileSync(join(root, '.persona', 'deepseek', 'PERSONA.md'), 'utf8')
+  assert.match(profile, /鲸萝/)
+})
+
+test('new --from names its unknown example and lists what exists', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'persona-ex-miss-'))
+  const { run } = harness(root)
+  const result = await run('new --from nosuch')
+  assert.equal(result.kind, 'error')
+  assert.match(result.text, /unknown example "nosuch"/)
+  assert.match(result.text, /deepseek/)
+})
+
+test('examples lists every bundled example with its description', async () => {
+  const root = workspace()
+  const { run } = harness(root)
+  const result = await run('examples')
+  assert.equal(result.kind, 'success')
+  assert.match(result.text, /deepseek:/)
+  assert.match(result.text, /--from <example>/)
+})

@@ -1,10 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { splitFrontmatter, parseYaml } from '../lib/frontmatter.js'
-import { createPersona, renderPersonaPrefix, renderPersonaBody, stripPersonaText, listPersonas, libraryRoot, BUNDLE_ROOT } from '../lib/persona.js'
+import { createPersona, renderPersonaPrefix, renderPersonaBody, stripPersonaText, listPersonas, listExamples, createPersonaFromExample, libraryRoot, BUNDLE_ROOT } from '../lib/persona.js'
 import { readBinding, writeBinding, clearBinding } from '../lib/bindings.js'
 import { appendRoute } from '../lib/route-log.js'
 import { equipAgent } from '../lib/equip.js'
@@ -77,6 +77,25 @@ test('PERSONA template: Layer 2 carries the examples contract', () => {
   assert.match(tpl, /- \*\*examples\*\*: 3–5 labeled pairs/)
   assert.match(tpl, /BASELINE voice — `STATE\.md` re-tunes it/)
   assert.match(tpl, /Patterns to absorb, never lines to reuse/)
+})
+
+test('shipped example: deepseek is a complete, parseable archive', () => {
+  const examples = listExamples()
+  assert.deepEqual(examples.map(e => e.name), ['deepseek'])
+  const dir = join(BUNDLE_ROOT, 'examples', 'deepseek')
+  // Frontmatter must parse through the shipped grammar — a malformed example
+  // would teach the authoring skill a broken dialect.
+  const { data } = splitFrontmatter(readFileSync(join(dir, 'PERSONA.md'), 'utf8'))
+  assert.equal(data.name, 'deepseek')
+  assert.ok(String(data.description ?? '').length > 0)
+  // A complete archive means a memory tree the trigger system can fire on.
+  assert.equal(existsSync(join(dir, 'memory', 'core', 'identity.md')), true)
+  const nodes = mem.listNodes(dir)
+  assert.ok(nodes.length >= 1, 'example ships at least one memory node')
+  // Copying it to a fresh library yields a working persona.
+  const root = mkdtempSync(join(tmpdir(), 'persona-example-'))
+  createPersonaFromExample(root, 'deepseek', 'deepseek')
+  assert.equal(listPersonas(root)[0].name, 'deepseek')
 })
 
 test('memory CRUD + search + alias', () => {

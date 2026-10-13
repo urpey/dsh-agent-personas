@@ -1,6 +1,7 @@
 node_modules/
 *.log
 .DS_Store
-.persona/.bindings/
-.persona/.routes/
+.env
+.env.*
+.persona/
 .scratch/

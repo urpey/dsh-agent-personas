@@ -1,9 +1,9 @@
 /**
  * /persona slash commands: human entry points.
- *   list | new <name> [desc] | use <name> | off | spawn <name> [task] | compact <name> | status
+ *   list | new <name> [desc] [--from <example>] | examples | use <name> | off | spawn <name> [task] | compact <name> | status
  */
 import { randomUUID } from 'node:crypto'
-import { listPersonas, createPersona, personaExists, ensurePersona, personaDir, libraryRoot } from './persona.js'
+import { listPersonas, createPersona, createPersonaFromExample, listExamples, personaExists, ensurePersona, personaDir, libraryRoot } from './persona.js'
 import { equipAgent } from './equip.js'
 import { pendingContinuable, personaBodyText } from './provider.js'
 import { persistBinding, clearBinding } from './bindings.js'
@@ -30,7 +30,7 @@ const sessionIdOf = (agent) => agent?.session?.header?.id ?? agent?.session?.id
  * Shared by `/persona use` and the model-facing `persona_use` tool, so the two
  * entry points cannot drift: the already-equipped guard, the equip handle on
  * the agent, and the ledger row are one implementation. The equip handle lives
- * ON the agent (never a module-level table) — see `docs/agents/agent-personas.md`
+ * ON the agent (never a module-level table) — see `docs/persona-format.md`
  * for why a process-scoped map lied after every reload.
  *
  * @param agent - the live agent the equip belongs to.
@@ -57,8 +57,8 @@ export function equipSession(agent, name, cfg, resolveCwd) {
 export function registerCommands(ctx, cfg, resolveCwd) {
   ctx.commands.register({
     name: 'persona',
-    description: 'Manage persistent personas: /persona list|new|use|off|spawn|compact|status — author a new one with the /personas picker (agent-guided)',
-    input: { hint: '<list|new|use|off|spawn|compact|status> [args]' },
+    description: 'Manage persistent personas: /persona list|new|examples|use|off|spawn|compact|status — author a new one with the /personas picker (agent-guided)',
+    input: { hint: '<list|new|examples|use|off|spawn|compact|status> [args]' },
     handler: async ({ agent, rawInput }) => {
       const [sub = '', ...rest] = rawInput.trim().split(/\s+/).filter(Boolean)
       const cwd = resolveCwd(agent)
@@ -69,12 +69,28 @@ export function registerCommands(ctx, cfg, resolveCwd) {
           return ok(rows.map(r => `- ${r.name}: ${r.description || '(no description)'} · ${r.memoryCount} memories`).join('\n'))
         }
         case 'new': {
-          const [name, ...desc] = rest
-          if (!name) return err('usage: /persona new <name> [description]')
+          // `--from` may appear anywhere; the first remaining token is the
+          // persona name (defaulting to the example's own), the rest a desc.
+          const fromAt = rest.indexOf('--from')
+          const from = fromAt === -1 ? undefined : rest[fromAt + 1]
+          const positional = fromAt === -1 ? rest : [...rest.slice(0, fromAt), ...rest.slice(fromAt + 2)]
+          const [name = from, ...desc] = positional
+          if (from === '') return err('usage: /persona new [name] --from <example>')
+          if (!name) return err('usage: /persona new <name> [description] — or /persona new [name] --from <example> (see /persona examples)')
           try {
+            if (from !== undefined) {
+              const dir = createPersonaFromExample(cwd, name, from, cfg.libraryDir)
+              return ok(`Created ${dir} from example "${from}" — /persona use ${name} or /persona spawn ${name}.`)
+            }
             const dir = createPersona(cwd, name, desc.join(' '), cfg.libraryDir)
             return ok(`Created ${dir} (empty skeleton)\nAuthor it with the /personas picker — the agent guides you through it — or edit PERSONA.md (identity+voice) and STATE.md (fields) by hand, then /persona use ${name} or /persona spawn ${name}.`)
           } catch (e) { return err(e.message) }
+        }
+        case 'examples': {
+          const rows = listExamples()
+          if (!rows.length) return ok('No example personas shipped with this bundle.')
+          return ok(rows.map(r => `- ${r.name}: ${r.description || '(no description)'}`).join('\n')
+            + '\nCreate one with: /persona new <name> --from <example>')
         }
         case 'use': {
           const [name] = rest
@@ -158,7 +174,7 @@ export function registerCommands(ctx, cfg, resolveCwd) {
           ].join('\n'))
         }
         default:
-          return err(`unknown subcommand "${sub}". Try: list | new <name> | use <name> | off | spawn <name> [task] | compact <name> | status`)
+          return err(`unknown subcommand "${sub}". Try: list | new <name> [--from <example>] | examples | use <name> | off | spawn <name> [task] | compact <name> | status`)
       }
     },
   })
