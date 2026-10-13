@@ -10,6 +10,9 @@ import { renderPersonaBody, ensurePersona, readPromptAsset, PROFILE_MARKER } fro
 import * as memory from './memory-store.js'
 import * as state from './state-store.js'
 import { renderStateSummary } from './state-store.js'
+import { splitFrontmatter } from './frontmatter.js'
+import { assessTurn } from './critical.js'
+import { stageOnePrompt, stageTwoPrompt } from './critical-prompts.js'
 
 const PLUGIN = 'dsh-persona-system'
 const WRITE_TOOLS = new Set(['write', 'edit', 'multi_edit', 'bash'])
@@ -47,6 +50,12 @@ function jsonTool(name, description, parameters, execute, { concurrencySafe = fa
 export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'session') {
   const disposers = []
   const reg = (d) => { if (typeof d === 'function') disposers.push(d); return d }
+
+  // PERSONA.md frontmatter → gate + monologue tuning inputs.
+  let meta = {}
+  try {
+    meta = splitFrontmatter(readFileSync(join(personaDir, 'PERSONA.md'), 'utf8')).data
+  } catch { /* profile unreadable — gate falls back to interest-less */ }
 
   // ---- prompt sections -------------------------------------------------
   const sp = agentCtx.systemPrompt
@@ -260,6 +269,17 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
     { type: 'object', properties: { text: { type: 'string' } }, required: ['text'], additionalProperties: false },
     async ({ text }) => state.appendNote(personaDir, text)))
 
+  // ---- inner_commit: the step-cutting tool that carries stage 1 → stage 2 --
+  // Exists only so a critical turn can end its first generation AFTER the
+  // <thinking> monologue and re-enter with the transform directive.
+  T(jsonTool('inner_commit',
+    'Commit the inner monologue you just emitted in <thinking>…</thinking>. Call this immediately after the block on a critical turn — it ends stage 1 and hands you the stage-2 transform directive.',
+    { type: 'object', properties: {}, additionalProperties: false },
+    async (_a, exec) => {
+      try { exec?.agent?.session?.append('persona/stage', { stage: 2, turn: 'mark' }) } catch {}
+      return stageTwoPrompt({ name })
+    }))
+
   // Observe turn failures through the agent scope logger (host log).
   reg(agentCtx.on('agent/error', ({ turn, step, error }) => {
     agentCtx.logger?.warn?.(`[persona:${name}] turn ${turn} step ${step} error:`, error)
@@ -270,14 +290,18 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
   const recalled = new Set()          // uris injected this session — no repeats
   const groundingText = cfg.groundingInterval > 0 ? readPromptAsset('grounding.md').trim() : ''
 
-  /** Text of the newest user-visible message in this step's input. */
+  /** Text of the newest REAL user input in this step — skip runtime snapshots
+   *  (time-context/skill-catalog/instructions) that ride in the same step. */
   const latestText = (decision) => {
     const msgs = decision?.messages ?? []
     for (let i = msgs.length - 1; i >= 0; i--) {
-      const blocks = msgs[i]?.content
+      const m = msgs[i]
+      const blocks = m?.content
       if (!Array.isArray(blocks)) continue
+      const kind = m?.source?.kind
+      if (kind && kind !== 'user' && kind !== 'dsh-persona-system' && kind !== 'model') continue
       const text = blocks.filter(b => b?.type === 'text').map(b => b.text).join('\n')
-      if (text) return text
+      if (text && !text.startsWith('[persona')) return text
     }
     return ''
   }
@@ -301,8 +325,20 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
     const decision = await next()
     if (decision.kind !== 'enter') return decision
     const extra = []
+    const text = latestText(decision)
+    // Critical gate — the upstream design step 0. Fresh user input on a new turn,
+    // not one of our own injected notices, may escalate to two-generation.
+    if (step === 1 && text && !text.startsWith('[persona')) {
+      try {
+        const st = state.loadState(personaDir)
+        const { critical, reason } = assessTurn({
+          text, meta, state: st.data, extraKeywords: cfg.criticalKeywords ?? [],
+        })
+        if (critical) extra.push(userMsg(stageOnePrompt({ name, mbti: meta.mbti ?? '', state: st.data, reason })))
+      } catch { /* unreadable state — gate silently stays open */ }
+    }
     // Trigger-based recall: inject full node bodies for hits not yet shown.
-    for (const hit of recallHits(latestText(decision))) {
+    for (const hit of recallHits(text)) {
       try {
         const node = memory.readNode(personaDir, hit.uri)
         recalled.add(hit.uri)

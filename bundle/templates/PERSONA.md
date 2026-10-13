@@ -2,6 +2,8 @@
 name: {{name}}
 description: {{description}}
 triggers: []
+mbti: ''            # e.g. INTP — tunes the critical-turn inner monologue
+interests: []       # topic keywords; a hit marks the turn critical
 ---
 
 ## Layer 1 · Core Self

@@ -109,3 +109,20 @@ test('memory_update ellipsis patch + title sanitize', () => {
   mem.updateNode(tmp, 'memory://a/b', { oldString: 'start...tail', newString: 'REPLACED' })
   assert.match(mem.readNode(tmp, 'memory://a/b').content, /^REPLACED end/)
 })
+
+test('critical gate: criticality criteria', async () => {
+  const { assessTurn } = await import('../lib/critical.js')
+  const st = { palam: { joy: { value: 0 } }, relations: { user: { value: 5 } }, buffs: [] }
+  // first contact
+  assert.equal(assessTurn({ text: 'hi', state: { relations: {} } }).critical, true)
+  // keyword hit
+  assert.equal(assessTurn({ text: '这个 bug 是错的，重写', state: st }).critical, true)
+  // interest hit
+  assert.equal(assessTurn({ text: '聊聊数据库', meta: { interests: ['数据库'] }, state: st }).critical, true)
+  // palam pressure
+  assert.equal(assessTurn({ text: '随便看看', state: { ...st, palam: { anger: { value: 40 } } } }).critical, true)
+  // buff active
+  assert.equal(assessTurn({ text: '随便看看', state: { ...st, buffs: [{ name: 'adrenaline' }] } }).critical, true)
+  // routine
+  assert.equal(assessTurn({ text: '列一下文件', state: st }).critical, false)
+})
