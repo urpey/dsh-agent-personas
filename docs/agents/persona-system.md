@@ -201,7 +201,7 @@ Prompt sections injected per equipped agent (agent-scoped, in assembly order):
 |---|---|
 | `## Current state` | Rendered STATE summary — base/max, palam, relations, active buffs. Internal dashboard only: the protocol forbids speaking numbers/stat names in visible text; state shapes tone, not content. |
 | boot nodes | MEMORY.md `Boot URIs` expanded to full node bodies. |
-| `## Memory index` | Compact catalog: `- uri (pN [alias→x]) — disclosure [triggers: a, b]`. Capped at 30 rows by priority; overflow reachable via `memory_search`. |
+| `## Memory index` | Compact catalog: `- uri (pN · title [· alias→x]) — disclosure [triggers: a, b]`. Capped at 30 rows by priority; overflow reachable via `memory_search`. |
 
 Why not prompt sections: editing the system prompt invalidates the provider's prompt cache for everything after it — the entire conversation included — so every `state_delta`, settle or memory write made the next request pay full price for the whole context. Measured on a real session: two consecutive steps cost 31,456 and 35,677 fresh input tokens (only 256 cached) right after a settle and a `memory_create`. As a trailing message, only the tail is new and the stable prefix stays cacheable.
 
@@ -210,7 +210,8 @@ Refresh rule: the block is injected when it could have gone stale — at the sta
 Turn hooks (`agent/pre-step`, `agent/turn-stopping`):
 
 - **Buff tick** — first step of each new turn decrements `buffs[].duration`; expired names are injected as `[persona] buffs expired: …`.
-- **Memory recall** — each step scans the newest user-visible message for node `triggers` (case-insensitive, ≤3 hits, once per URI per session). Hits arrive as `[persona recall] memory://path` + body in the step's input — already-read memory, not a tool call.
+- **Memory recall** — each step scans the newest user-visible message for node `triggers` (case-insensitive, ≤3 hits, once per URI per session). Hits arrive as `[persona recall] memory://path` + body in the step's input — already-read memory, not a tool call. A URI the model pulled itself via `memory_read` in the same session is skipped — pull consumes push eligibility (an alias read marks the resolved target too).
+- **Pull-chain neighborhood** — `memory_read` results also carry `children` (direct URI children, ≤10, aliases marked) and `seeAlso` (≤5 `{keyword, uri}` links: other nodes' trigger words found in this node's content — `triggers` serve double duty: input-side push + in-content graph navigation). `memory_search` hits carry `disclosure`/`triggers` so a card can be judged before reading. `memory_create` without `disclosure` still succeeds but returns a `no disclosure` notice — a bare URI row is invisible to the index reader.
 - **Grounding** — when `config.groundingInterval > 0`, `prompts/grounding.md` is injected every Nth step.
 - **Closing reflection** — when `config.closingReflection` matches the mode (`one-shot` default), turn end queues `prompts/closing.md` as a followup turn. `state_settle` is unconditional; `memory_create` is conditional — write only when something is worth keeping, never a filler note. The closing prompt also asks the agent to tidy a bloated index (merge/reprioritize/alias/delete).
 - **One-shot output rewind** — the reflection adds a housekeeping turn, which would make `readResult` return its chatter instead of the task answer. The `persona` provider wraps `run.result`: for a staged (critical) turn it returns the first visible text AFTER the last `inner_commit` call — never the monologue; for a routine turn, the last assistant message before the `[persona closing]` injection.

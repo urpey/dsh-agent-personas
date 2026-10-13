@@ -138,7 +138,7 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
         const lines = shown.map(n => {
           const t = Array.isArray(n.triggers) && n.triggers.length ? ` [triggers: ${n.triggers.join(', ')}]` : ''
           const d = n.disclosure ? ` — ${n.disclosure}` : ''
-          return `- ${n.uri} (p${n.priority ?? 3}${n.aliasOf ? ` alias→${n.aliasOf}` : ''})${d}${t}`
+          return `- ${n.uri} (p${n.priority ?? 3}${n.title ? ` · ${n.title}` : ''}${n.aliasOf ? ` · alias→${n.aliasOf}` : ''})${d}${t}`
         })
         const hidden = sorted.length - shown.length
         if (hidden > 0) lines.push(`… ${hidden} more nodes — use memory_search to reach them`)
@@ -214,9 +214,16 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
     return reg(agentCtx.tools.register(def))
   }
   T(jsonTool('memory_read',
-    'Recall a memory node by URI (memory://path) — not "looking up a database", remembering what you lived. Resolves aliases. Returns frontmatter + content.',
+    'Recall a memory node by URI (memory://path) — not "looking up a database", remembering what you lived. Resolves aliases. Returns frontmatter + content + children/see-also links — follow them instead of guessing URIs.',
     { type: 'object', properties: { uri: { type: 'string' } }, required: ['uri'], additionalProperties: false },
-    async ({ uri }) => memory.readNode(personaDir, uri), { concurrencySafe: true }))
+    async ({ uri }) => {
+      const node = memory.readNode(personaDir, uri)
+      // Pulled by hand → the push channel must not re-deliver the same body.
+      // An alias read marks the resolved target too — same content.
+      recalled.add(uri)
+      if (node.aliasTarget) recalled.add(node.aliasTarget)
+      return { ...node, ...memory.neighborhood(personaDir, node) }
+    }, { concurrencySafe: true }))
   T(jsonTool('memory_create',
     'Record a memory at memory://path — something worth keeping: a learned preference, a relationship shift, a promise, a scar, a judgment that changed your mind. WRITE IN FIRST PERSON ("I", "我"): memories are your experiences, not objective laws or orders to your future self — no "严禁/必须/【铁律】" phrasing, keep them overthrowable. title: ENGLISH-ONLY [A-Za-z0-9_-]. disclosure: when this memory should surface (e.g. "When the user challenges my values"). triggers: words whose appearance in input auto-recalls this node.',
     {
@@ -228,7 +235,14 @@ export function equipAgent(agentCtx, agent, personaDir, name, cfg, mode = 'sessi
       },
       required: ['uri', 'content'], additionalProperties: false,
     },
-    async (a) => ({ uri: memory.createNode(personaDir, a.uri, a) })))
+    async (a) => {
+      const uri = memory.createNode(personaDir, a.uri, a)
+      // Advisory only (L2 convention — notices, never rejections): a node
+      // without disclosure is a bare URI row to the index reader.
+      return a.disclosure
+        ? { uri }
+        : { uri, notice: 'no disclosure — the index shows only this URI; memory_update can add one if it should surface on context' }
+    }))
   T(jsonTool('memory_update',
     'Correct or extend a memory: patch (old_string→new_string; "start...end" replaces the span between the two anchors) or append. When the user says you were wrong, fix the node NOW — keeping a stale wrong version guarantees repeating it. Also edits priority/disclosure and adds/removes trigger words. Prefer updating over deleting.',
     {

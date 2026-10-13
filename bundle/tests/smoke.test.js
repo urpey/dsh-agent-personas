@@ -722,6 +722,80 @@ test('state_delta event calibration: silent in band, noticed when adrift', () =>
   assert.match(st.renderStateSummary(st.loadState(dir).data, { reactions }), /reactions: praise→joy×1\.5,user×1\.2/)
 })
 
+test('memory neighborhood + search cards', () => {
+  const nd = mkdtempSync(join(tmpdir(), 'persona-nbr-'))
+  createPersona(nd, 'bob', 'nbr persona')
+  const np = join(nd, '.persona', 'bob')
+  mem.createNode(np, 'memory://a', { title: 'a', content: 'I love mango and selfhit.', triggers: ['selfhit'], disclosure: 'root' })
+  mem.createNode(np, 'memory://a/b', { title: 'b', content: 'child', priority: 1, disclosure: 'child b' })
+  mem.createNode(np, 'memory://a/b/c', { content: 'grandchild' })
+  mem.createNode(np, 'memory://x', { content: 'target', triggers: ['mango'] })
+  mem.createAlias(np, 'memory://a/z', 'memory://a/b')
+
+  const node = mem.readNode(np, 'memory://a')
+  const nb = mem.neighborhood(np, node)
+  // Direct children only: b + the alias z (doorway), not the grandchild c.
+  assert.deepEqual(nb.children.map(c => c.uri).sort(), ['memory://a/b', 'memory://a/z'])
+  assert.equal(nb.children.find(c => c.uri === 'memory://a/z').aliasOf, 'memory://a/b')
+  assert.equal(nb.children.find(c => c.uri === 'memory://a/b').disclosure, 'child b')
+  // See-also: another node's trigger found in this body → one link.
+  assert.deepEqual(nb.seeAlso, [{ keyword: 'mango', uri: 'memory://x' }])
+  // Self-trigger noise never links the node to itself.
+  assert.equal(nb.seeAlso.some(l => l.uri === 'memory://a'), false)
+  // A node with nothing nearby → empty lists, not a throw.
+  assert.deepEqual(mem.neighborhood(np, mem.readNode(np, 'memory://x')), { children: [], seeAlso: [] })
+  // Search hits carry the card fields verbatim.
+  const hit = mem.searchNodes(np, 'target').find(h => h.uri === 'memory://x')
+  assert.deepEqual(hit.triggers, ['mango'])
+  assert.equal(hit.disclosure, '')
+  assert.equal(mem.searchNodes(np, 'child').find(h => h.uri === 'memory://a/b').disclosure, 'child b')
+})
+
+test('equip memory pull-chain: read consumes push, create notice, index title', async () => {
+  const nd = mkdtempSync(join(tmpdir(), 'persona-pull-'))
+  createPersona(nd, 'bob', 'pull persona')
+  const np = join(nd, '.persona', 'bob')
+
+  // Control: an equip that never reads the node still gets the push.
+  const fake = fakeAgentCtx()
+  mem.createNode(np, 'memory://food/mango', { title: 'mango', content: 'I am allergic.', triggers: ['mango'], disclosure: 'food talk' })
+  equipAgent(fake.ctx, fakeAgent('session-push'), np, 'bob',
+    { criticalGate: 'auto', groundingInterval: 0, closingReflection: 'never' }, 'session')
+  const d1 = await runPreStep(fake, { turn: 1, step: 1, messages: [userMessage('want mango?')] })
+  assert.match(injectedText(d1), /\[persona recall\] memory:\/\/food\/mango/)
+
+  // A hand-read consumes push eligibility — same step input, no recall line.
+  const fake2 = fakeAgentCtx()
+  equipAgent(fake2.ctx, fakeAgent('session-pulled'), np, 'bob',
+    { criticalGate: 'auto', groundingInterval: 0, closingReflection: 'never' }, 'session')
+  const read = await fake2.tools.get('memory_read').execute({ uri: 'memory://food/mango' })
+  assert.ok(Array.isArray(read.children) && Array.isArray(read.seeAlso))
+  const d2 = await runPreStep(fake2, { turn: 1, step: 1, messages: [userMessage('want mango?')] })
+  assert.doesNotMatch(injectedText(d2), /\[persona recall\] memory:\/\/food\/mango/)
+
+  // Reading an alias marks the target too.
+  mem.createAlias(np, 'memory://alias/fruit', 'memory://food/mango')
+  const fake3 = fakeAgentCtx()
+  equipAgent(fake3.ctx, fakeAgent('session-aliaspull'), np, 'bob',
+    { criticalGate: 'auto', groundingInterval: 0, closingReflection: 'never' }, 'session')
+  const ar = await fake3.tools.get('memory_read').execute({ uri: 'memory://alias/fruit' })
+  assert.equal(ar.aliasTarget, 'memory://food/mango')
+  const d3 = await runPreStep(fake3, { turn: 2, step: 1, messages: [userMessage('more mango?')] })
+  assert.doesNotMatch(injectedText(d3), /\[persona recall\] memory:\/\/food\/mango/)
+
+  // Create advisory: disclosure missing → notice; present → none.
+  const bare = await fake3.tools.get('memory_create').execute({ uri: 'memory://scratch', content: 'quick note' })
+  assert.match(bare.notice, /no disclosure/)
+  const full = await fake3.tools.get('memory_create').execute({ uri: 'memory://done', content: 'noted', disclosure: 'when done' })
+  assert.equal(full.notice, undefined)
+
+  // The refreshed context index line carries the title inside the paren.
+  const d4 = await runPreStep(fake3, { turn: 3, step: 1, messages: [userMessage('hi')] })
+  const ctx = injectedText(d4)
+  assert.match(ctx, /memory:\/\/food\/mango \(p3 · mango\)/)
+  assert.match(ctx, /memory:\/\/alias\/fruit \(p3 · alias→memory:\/\/food\/mango\)/)
+})
+
 test('settle: decay is % of remainder kept — never grows palam', () => {
   const dir = mkdtempSync(join(tmpdir(), 'persona-settle-'))
   mkdirSync(join(dir, 'memory'), { recursive: true })

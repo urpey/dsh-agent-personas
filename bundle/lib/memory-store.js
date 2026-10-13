@@ -103,6 +103,49 @@ export function updateNode(personaDir, uri, { oldString, newString, append, prio
   writeFileSync(file, joinFrontmatter(meta, nextBody), 'utf8')
 }
 
+/**
+ * Adjacency for a node, for the pull chain: direct children (exactly one URI
+ * segment deeper, aliases included as doorways) + see-also links (other
+ * nodes' trigger words found in this node's content). Links are addresses,
+ * not bodies — progressive disclosure stays the model's choice.
+ * `node` is the readNode result (uri = the URI asked for; children live under
+ * the asked path, so an alias lists its own subtree). Caps bound the result.
+ */
+const MAX_CHILD_LINES = 10
+const MAX_LINK_LINES = 5
+
+export function neighborhood(personaDir, node) {
+  const self = node?.uri ?? ''
+  const prefix = `${self}/`
+  const content = String(node?.content ?? '').toLowerCase()
+  const children = []
+  const seeAlso = []
+  const seenLinks = new Set()
+  for (const n of listNodes(personaDir)) {
+    if (n.uri.startsWith(prefix) && !n.uri.slice(prefix.length).includes('/')) {
+      children.push({
+        uri: n.uri, title: n.title, disclosure: n.disclosure,
+        priority: n.priority, ...(n.aliasOf ? { aliasOf: n.aliasOf } : {}),
+      })
+    }
+    // see-also: another node's trigger word surfaced inside this body.
+    // Skip self (asked URI AND the resolved target), and alias nodes — they
+    // carry no body, the canonical URI is the link the model wants.
+    if (n.uri === self || n.uri === node?.aliasTarget || n.aliasOf) continue
+    for (const t of n.triggers ?? []) {
+      const k = String(t ?? '')
+      if (!k || seenLinks.has(`${k}|${n.uri}`)) continue
+      if (content.includes(k.toLowerCase())) {
+        seenLinks.add(`${k}|${n.uri}`)
+        seeAlso.push({ keyword: k, uri: n.uri })
+      }
+    }
+  }
+  children.sort((a, b) => (a.priority ?? 3) - (b.priority ?? 3) || a.uri.localeCompare(b.uri))
+  seeAlso.sort((a, b) => a.keyword.localeCompare(b.keyword) || a.uri.localeCompare(b.uri))
+  return { children: children.slice(0, MAX_CHILD_LINES), seeAlso: seeAlso.slice(0, MAX_LINK_LINES) }
+}
+
 export function deleteNode(personaDir, uri) {
   const file = uriToPath(personaDir, uri)
   if (!existsSync(file)) throw new Error(`no memory at ${uri}`)
@@ -137,6 +180,8 @@ export function searchNodes(personaDir, query, limit = 10) {
       hits.push({
         uri: pathToUri(personaDir, f),
         title: data.title,
+        disclosure: data.disclosure ?? '',
+        triggers: Array.isArray(data.triggers) ? data.triggers : [],
         snippet: idx >= 0 ? body.slice(Math.max(0, idx - 60), idx + 140).trim() : body.slice(0, 140).trim(),
       })
     }
